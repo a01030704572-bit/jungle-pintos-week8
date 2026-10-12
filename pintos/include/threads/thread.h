@@ -82,10 +82,15 @@ typedef int tid_t;
  
 struct thread {
 	/*thread.c가 소유함. */
-	tid_t tid;                          /* 스레드 식별자. */
-	enum thread_status status;          /* 스레드 상태. */
-	char name[16];                      /* 이름 (디버깅용). */
-	int priority;                       /* 우선 사항. */
+	tid_t tid;
+	enum thread_status status;
+	char name[16];
+	int priority;
+	int base_priority;
+	struct lock *wait_on_lock;
+	struct list donations;
+	struct list_elem donation_elem;
+
 
 	/* thread.c와 synch.c 간에 공유됩니다. */
 	struct list_elem elem;             		/*목록 요소. */

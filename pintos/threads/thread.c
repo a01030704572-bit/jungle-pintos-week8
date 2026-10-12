@@ -394,8 +394,14 @@ thread_yield (void) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	enum intr_level old_level = intr_disable ();
+	struct thread *curr = thread_current ();
+
+	curr->base_priority = new_priority;
+	thread_update_priority (curr);
 	thread_check_preemption ();
+
+	intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -493,6 +499,12 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+
+	/* 우선순위 관련 필드 초기화 */
+	t->base_priority = priority;
+	t->wait_on_lock = NULL;
+	list_init(&(t->donations));
+
 }
 
 /* 다음에 스케줄링할 스레드를 선택하여 반환합니다. 
@@ -677,10 +689,10 @@ schedule (void) {
 /* Returns a tid to use for a new thread. */
 static tid_t
 allocate_tid (void) {
-	static tid_t next_tid = 1;
-	tid_t tid;
+	static tid_t next_tid = 1;		/* 다음에 할당할 스레드 번호*/
+	tid_t tid;						/* 현재 스레드에 할당할 번호 */
 
-	lock_acquire (&tid_lock);
+	lock_acquire (&tid_lock);		/* tid_lock: 번호를 할당하는 작업을 보호하는 락 */
 	tid = next_tid++;
 	lock_release (&tid_lock);
 
