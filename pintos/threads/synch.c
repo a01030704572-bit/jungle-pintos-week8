@@ -107,12 +107,29 @@ sema_up (struct semaphore *sema) {
 	enum intr_level old_level;
 
 	ASSERT (sema != NULL);
-
 	old_level = intr_disable ();
-	if (!list_empty (&sema->waiters))
-		thread_unblock (list_entry (list_pop_front (&sema->waiters),
-					struct thread, elem));
+
+	if (!list_empty (&sema->waiters)){
+		struct list_elem *best = list_begin ( &sema -> waiters);
+		struct list_elem * e;
+
+		for ( e = list_next (best);
+			 e != list_end (&sema->waiters);
+			 e = list_next(e)){
+				struct thread *candidate = list_entry ( e, struct thread, elem);
+				struct thread *winner = list_entry (best,struct thread,elem);
+
+				if ( candidate -> priority > winner -> priority){
+					best = e;
+				}
+			 }
+
+	list_remove(best);
+	thread_unblock ( list_entry (best, struct thread, elem));
+	}
+
 	sema->value++;
+	thread_check_preemption();
 	intr_set_level (old_level);
 }
 
@@ -239,7 +256,8 @@ lock_held_by_current_thread (const struct lock *lock) {
 /* One semaphore in a list. */
 struct semaphore_elem {
 	struct list_elem elem;              /* List element. */
-	struct semaphore semaphore;         /* This semaphore. */
+	struct semaphore semaphore; 
+	struct thread *waiting_thread;        /* This semaphore. */
 };
 
 /* Initializes condition variable COND.  A condition variable
@@ -282,6 +300,7 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	sema_init (&waiter.semaphore, 0);
+	waiter.waiting_thread = thread_current ();
 	list_push_back (&cond->waiters, &waiter.elem);
 	lock_release (lock);
 	sema_down (&waiter.semaphore);
@@ -302,9 +321,28 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (!intr_context ());
 	ASSERT (lock_held_by_current_thread (lock));
 
-	if (!list_empty (&cond->waiters))
-		sema_up (&list_entry (list_pop_front (&cond->waiters),
-					struct semaphore_elem, elem)->semaphore);
+	if (!list_empty (&cond->waiters)){
+		struct list_elem * best = list_begin(&cond -> waiters);
+		struct list_elem * e;
+
+		for ( e = list_next(best);
+			e != list_end (&cond -> waiters);
+			e = list_next(e)){
+				struct semaphore_elem * candidate = list_entry ( e, struct semaphore_elem, elem);
+				struct semaphore_elem * winner = list_entry ( best, struct semaphore_elem, elem);
+				if ( candidate -> waiting_thread -> priority > winner -> waiting_thread -> priority){
+					best = e;
+				}
+
+
+			}
+
+		struct semaphore_elem *selected = list_entry ( best, struct semaphore_elem, elem);
+		list_remove (best);
+		sema_up (&selected -> semaphore);
+
+	}
+		
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
