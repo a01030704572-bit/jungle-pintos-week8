@@ -207,9 +207,40 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
-
+	thread_check_preemption();
 	return tid;
-}
+		}
+	
+	void
+	thread_check_preemption (void){
+		enum intr_level old_level = intr_disable();
+		struct thread * curr = thread_current();
+		struct list_elem *e;
+		bool should_yield = false;
+	
+
+		for ( e = list_begin (&ready_list);
+			e != list_end (&ready_list);
+			e = list_next (e)) {
+				struct thread * candidate = list_entry ( e , struct thread, elem);
+
+				if ( candidate -> priority > curr -> priority){
+					should_yield = true;
+					break;
+				}
+
+			}
+		
+		if (should_yield){
+			if(intr_context())
+				intr_yield_on_return();
+		
+			else
+				thread_yield();
+		}
+		intr_set_level(old_level);
+	}
+
 
 /* 현재 스레드를 대기(sleep) 상태로 만듭니다.
    thread_unblock()에 의해 깨어나기 전까지는 다시 스케줄링되지 않습니다.
@@ -364,6 +395,7 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	thread_check_preemption ();
 }
 
 /* Returns the current thread's priority. */
@@ -470,10 +502,27 @@ init_thread (struct thread *t, const char *name, int priority) {
 실행 큐가 비어 있다면 idle_thread를 반환합니다. */
 static struct thread *
 next_thread_to_run (void) {
+	struct list_elem *best;
+	struct list_elem *e;
+	
 	if (list_empty (&ready_list))
 		return idle_thread;
-	else
-		return list_entry (list_pop_front (&ready_list), struct thread, elem);
+	else {
+		best = list_begin(&ready_list);
+		for ( e = list_next (best);
+		e != list_end ( & ready_list);
+		e = list_next(e)){
+			struct thread * candidate = list_entry (e, struct thread, elem);
+			struct thread * winner = list_entry (best, struct thread, elem);
+
+			if (candidate -> priority > winner -> priority){
+				best = e;
+				
+			}
+		}
+	}
+	list_remove (best);
+	return list_entry (best, struct thread, elem);
 }
 
 /* Use iretq to launch the thread */
