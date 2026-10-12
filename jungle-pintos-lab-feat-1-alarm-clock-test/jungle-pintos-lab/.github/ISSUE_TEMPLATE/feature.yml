@@ -1,0 +1,55 @@
+name: "✨ Feature Request"
+description: "구현할 Pintos 기능 및 작업 내용을 작성하는 템플릿입니다."
+title: "[Feat]: "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: "### 📌 기능 요청 템플릿"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "📄 설명"
+      description: "구현할 Pintos 기능에 대해 설명해주세요."
+      placeholder: "구현하고자 하는 핵심 기능과 목적을 적어주세요."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: project
+    attributes:
+      label: "🎯 Project"
+      options:
+        - label: "Project 1 - Threads"
+        - label: "Project 2 - User Programs"
+        - label: "Project 3 - Virtual Memory"
+        - label: "Project 4 - File System"
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: "✅ 작업할 내용"
+      description: "구현에 필요한 세부 작업 목록을 작성해주세요."
+      placeholder: "- [ ] 세부 작업 1\n- [ ] 세부 작업 2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: "🧪 테스트"
+      description: "어떤 테스트를 통해 검증할 것인지 작성해주세요."
+      placeholder: "- [ ] pintos --verbose -- -q run alarm-multiple\n- [ ] "
+
+  - type: textarea
+    id: references
+    attributes:
+      label: "📚 참고 자료"
+      description: "관련 Pintos 문서, CSAPP, 테스트 코드 등을 작성해주세요."
+
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: "🙋 기타"
+      description: "팀원과 논의할 내용이 있다면 작성해주세요."

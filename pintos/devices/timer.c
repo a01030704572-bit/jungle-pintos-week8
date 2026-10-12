@@ -34,18 +34,18 @@ static void real_time_sleep (int64_t num, int32_t denom);
    corresponding interrupt. */
 void
 timer_init (void) {
-	/* 8254 input frequency divided by TIMER_FREQ, rounded to
-	   nearest. */
+	/* 8254 입력 주파수를 TIMER_FREQ로 나눈 후,
+	   가장 가까운 정수로 반올림함. */
 	uint16_t count = (1193180 + TIMER_FREQ / 2) / TIMER_FREQ;
 
-	outb (0x43, 0x34);    /* CW: counter 0, LSB then MSB, mode 2, binary. */
+	outb (0x43, 0x34);    /* CW: 카운터 0, LSB 후 MSB, 모드 2, 이진(binary). */
 	outb (0x40, count & 0xff);
 	outb (0x40, count >> 8);
 
 	intr_register_ext (0x20, timer_interrupt, "8254 Timer");
 }
 
-/* Calibrates loops_per_tick, used to implement brief delays. */
+/* 짧은 지연 시간을 구현하는 데 사용되는 loops_per_tick을 보정합니다. */
 void
 timer_calibrate (void) {
 	unsigned high_bit, test_bit;
@@ -88,14 +88,26 @@ timer_elapsed (int64_t then) {
 }
 
 /* Suspends execution for approximately TICKS timer ticks. */
-void
-timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+// void										// 반환값이 없다
+// timer_sleep (int64_t ticks) {			// ticks라는 값을 64비트 정수로 저장
+// 	int64_t start = timer_ticks ();			// timer tick 값을 start 변수에 저장
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+// 	ASSERT (intr_get_level () == INTR_ON);	// ASSERT : 조건이 거짓이면 프로그램 중단 및 오류 찾는 함수, intr_get_level() = 현재 CPU가 인터럽트 신호를 받을 수 있는 상태인지 확인하는 함수
+// 	while (timer_elapsed (start) < ticks)	// timer_elapsed : 시작한 시점부터 현재까지 몇 timer tick이 지났는지 계산하는 함수
+// 		thread_yield ();					// thread_yield() = 현재 스레드가 CPU 사용을 양보하여 다른 스레드가 실행될 기회를 주는 함수
+// }
+
+//1차---------------------------------------------------------------------------------------------------------------------------------------------------
+// 지정한 타이머 틱만큼 현재 스레드를 잠들게 하는 함수
+void timer_sleep(int64_t ticks)
+{
+    int64_t start = timer_ticks();			// 현재 타이머 틱 값을 start 변수에 저장
+    ASSERT(intr_get_level() == INTR_ON);	// 현재 인터럽트가 활성화되어 있는지 확인
+    if (ticks <= 0)							// 대기할 틱이 0 이하이면 아무것도 하지 않고 반환
+        return;					
+    sleep_put(start + ticks);				// 현재 시각에 대기할 틱 수를 더해 깨어날 시각을 계산하고 스레드를 잠들게 함
 }
+//------------------------------------------------------------------------------------------------------------------------------------------------------
 
 /* Suspends execution for approximately MS milliseconds. */
 void
@@ -121,10 +133,13 @@ timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
-/* Timer interrupt handler. */
+/* 타이머 인터럽트 핸들러. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
+//1차---------------------------------------------------------------------------------------------------------------------------------------------------
+	sleep_wakeup (ticks);
+//------------------------------------------------------------------------------------------------------------------------------------------------------
 	thread_tick ();
 }
 
