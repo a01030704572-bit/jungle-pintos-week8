@@ -1,0 +1,93 @@
+name: "🐛 Bug Report"
+description: "Pintos 개발 중 발생한 버그 및 에러를 제보하는 템플릿입니다."
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: "🐛 버그 설명"
+      description: "어떤 문제가 발생했는지 명확하게 작성해주세요."
+      placeholder: "예: Priority Donation 이후 특정 테스트에서 Kernel Panic이 발생합니다."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: project
+    attributes:
+      label: "📍 Project"
+      options:
+        - label: "Project 1 - Threads"
+        - label: "Project 2 - User Programs"
+        - label: "Project 3 - Virtual Memory"
+        - label: "Project 4 - File System"
+
+  - type: input
+    id: branch
+    attributes:
+      label: "🌿 발생 Branch"
+      placeholder: "예: feat/#12-priority-scheduling"
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: "🎯 발생 과정"
+      description: "버그가 발생하는 과정을 단계별로 작성해주세요."
+      placeholder: "1. 'pintos -- ...' 명령어로 테스트 실행\n2. ..."
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: "❌ 실제 동작"
+      description: "실제로 어떤 문제가 발생했는지 작성해주세요."
+      placeholder: "- [ ] 테스트 실패\n- [ ] Kernel Panic 발생\n- [ ] 예상과 다른 priority 값 출력\n- [ ] 프로그램이 종료되지 않고 멈춤"
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: "✅ 기대 동작"
+      description: "정상적으로 동작한다면 어떤 결과가 나와야 하는지 작성해주세요."
+
+  - type: textarea
+    id: related-tests
+    attributes:
+      label: "🧪 관련 테스트"
+      description: "실패한 Pintos 테스트가 있다면 작성해주세요."
+      placeholder: "tests/threads/priority-donate\ntests/threads/priority-preempt\ntests/userprog/system-call"
+
+  - type: textarea
+    id: test-results
+    attributes:
+      label: "📊 테스트 결과"
+      placeholder: "Pass:\nFail:"
+
+  - type: textarea
+    id: error-log
+    attributes:
+      label: "💥 에러 로그"
+      description: "Kernel Panic, Assertion Failure, Segmentation Fault 등의 에러 로그를 첨부해주세요."
+      render: shell
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: "🔍 원인 분석"
+      description: "현재까지 파악한 원인이 있다면 작성해주세요."
+
+  - type: textarea
+    id: fix-direction
+    attributes:
+      label: "🔧 수정 방향"
+      description: "현재 생각하고 있는 해결 방법이 있다면 작성해주세요."
+
+  - type: textarea
+    id: references
+    attributes:
+      label: "📎 참고 자료"
+      description: "관련 코드, Pintos 문서, 테스트 코드, 참고 자료 등이 있다면 작성해주세요."
+
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: "🙋 기타"
+      description: "추가로 팀원과 공유하거나 논의할 내용이 있다면 작성해주세요."

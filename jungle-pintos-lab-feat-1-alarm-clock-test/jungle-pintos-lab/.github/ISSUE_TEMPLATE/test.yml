@@ -1,0 +1,60 @@
+name: "🧪 Test"
+description: "Pintos 기능 검증 및 테스트를 위한 템플릿입니다."
+title: "[Test]: "
+labels: ["test"]
+body:
+  - type: textarea
+    id: test-description
+    attributes:
+      label: "🧪 테스트 설명"
+      description: "어떤 기능을 테스트하는지 작성해주세요."
+      placeholder: "예: Alarm clock 동시성 테스트 검증"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: project
+    attributes:
+      label: "📍 Project"
+      options:
+        - label: "Project 1 - Threads"
+        - label: "Project 2 - User Programs"
+        - label: "Project 3 - Virtual Memory"
+        - label: "Project 4 - File System"
+
+  - type: input
+    id: branch
+    attributes:
+      label: "🌿 작업 Branch"
+      placeholder: "예: test/#15-alarm-verify"
+
+  - type: textarea
+    id: test-purpose
+    attributes:
+      label: "🎯 테스트 목적"
+      description: "이 테스트를 통해 확인하고 싶은 내용을 작성해주세요."
+      placeholder: "예: 타이머 만료 시 스레드가 올바르게 웨이크업 되는지 확인"
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-items
+    attributes:
+      label: "✅ 테스트 항목"
+      description: "검증해야 할 세부 항목들을 체크리스트로 작성해주세요."
+      placeholder: "- [ ] 단일 스레드 sleep 테스트\n- [ ] 다중 스레드 동시 sleep 테스트\n- [ ] 우선순위 정렬 상태 확인"
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-results
+    attributes:
+      label: "📊 테스트 결과"
+      description: "테스트 실행 결과 로그나 Pass/Fail 여부를 작성해주세요."
+      placeholder: "Pass:\nFail:"
+
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: "🙋 기타"
+      description: "추가로 팀원과 공유하거나 논의할 내용이 있다면 작성해주세요."

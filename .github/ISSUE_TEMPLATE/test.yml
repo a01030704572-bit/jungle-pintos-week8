@@ -52,7 +52,6 @@ body:
       label: "📊 테스트 결과"
       description: "테스트 실행 결과 로그나 Pass/Fail 여부를 작성해주세요."
       placeholder: "Pass:\nFail:"
-    render: shell
 
   - type: textarea
     id: additional-notes
