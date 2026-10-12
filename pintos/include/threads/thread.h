@@ -91,7 +91,11 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
-
+	int base_priority;					/* 기본 우선순위 */
+	struct lock *wait_on_lock;			/* 현재 이 스레드가 기다리는 락 */
+	struct list donations;				/* 현재 스레드에 우선순위를 기부하는 스레드들의 목록 */
+	struct list_elem donation_elem;		/* 이 스레드가 다른 스데르의 기부 목록에 들어갈 때 사용하는 연결 요소 */
+	
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
