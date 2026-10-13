@@ -137,6 +137,18 @@ timer_print_stats (void) {
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
+	if (thread_mlfqs) {                              // mlfqs 모드일 때만
+		mlfqs_increment_recent_cpu ();               // 매 틱: 현재 스레드 recent_cpu + 1
+
+		if (ticks % TIMER_FREQ == 0) {               // 1초마다
+			mlfqs_update_load_avg ();                // load_avg 먼저
+			mlfqs_update_recent_cpu_all ();          // 그다음 모든 스레드 recent_cpu
+		}
+
+		if (ticks % 4 == 0)                          // 4틱마다
+			mlfqs_update_priority_all ();            // 모든 스레드 priority
+	}
+
 //1차---------------------------------------------------------------------------------------------------------------------------------------------------
 	sleep_wakeup (ticks);
 //------------------------------------------------------------------------------------------------------------------------------------------------------
