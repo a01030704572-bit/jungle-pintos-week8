@@ -477,21 +477,40 @@ mlfqs_update_load_avg (void) {
 }
 
 /* 현재 스레드(idle 제외)의 recent_cpu += 1 */
+/* 호출: 매 타이머 틱마다 timer_interrupt()에서 */
 void
 mlfqs_increment_recent_cpu (void) {
-	/* TODO */
+	struct thread *t = thread_current ();          		// 현재 실행 중인 스레드
+	if (t != idle_thread)                           	// 현재 스레드가 idle이 아니라면
+		t->recent_cpu = fp_add_int (t->recent_cpu, 1);  // recent_cpu += 1 고정소수점
 }
 
 /* all_list를 순회하며 mlfqs_calc_recent_cpu 적용 (idle 제외) */
 void
 mlfqs_update_recent_cpu_all (void) {
-	/* TODO */
+	struct list_elem *e; 
+
+	for (e = list_begin (&all_list); e != list_end (&all_list);
+	     e = list_next (e)) { // all_list의 모든 요소를 순회
+		struct thread *f = list_entry (e, struct thread, all_elem); // 고리 e에서, struct thread 타입을, all_elem 고리 기준
+
+		if (f != idle_thread) // 스레드가 idle_thread가 아니라면
+			mlfqs_calc_recent_cpu (f); // 해당 스레드의 recent_cpu 값을 갱신
+	}
 }
 
 /* all_list를 순회하며 mlfqs_calc_priority 적용 (idle 제외) */
 void
 mlfqs_update_priority_all (void) {
-	/* TODO */
+	struct list_elem *p; 
+
+	for (p = list_begin (&all_list); p != list_end (&all_list);
+	     p = list_next (p)) { 										// all_list의 모든 요소를 순회
+		struct thread *f = list_entry (p, struct thread, all_elem); // 고리 e에서, struct thread 타입을, all_elem 고리 기준
+
+		if (f != idle_thread) 										// 스레드가 idle_thread가 아니라면
+			mlfqs_calc_priority (f); 								// 해당 스레드의 recent_cpu 값을 갱신
+	}
 }
 //mlfqs
 
