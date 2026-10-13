@@ -10,6 +10,7 @@
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/fixed_point.h"
 #include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
@@ -30,6 +31,11 @@ static struct list ready_list;
 //1차---------------------------------------------------------------------------------------------------------------------------------------------------
 static struct list sleep_list;
 //------------------------------------------------------------------------------------------------------------------------------------------------------
+
+//mlfqs
+static struct list all_list;    // 모든 스레드 목록 (추가/제거: A, 순회: B)
+static int load_avg;            // 시스템 평균 부하, 고정소수점
+//mlfqs
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -113,6 +119,10 @@ thread_init (void) {
 	list_init (&sleep_list);
 	//------------------------------------------------------------------------------------------------------------------------------------------------------
 	list_init (&destruction_req);
+	//mlfqs
+	list_init (&all_list);                      // 모든 스레드 목록 초기화 (init_thread보다 먼저)
+	load_avg = 0;                               // 시스템 평균 부하 0에서 시작
+	//mlfqs
 
 	/* 실행 중인 스레드를 위한 스레드 구조체를 설정합니다. */
 	initial_thread = running_thread ();
@@ -193,6 +203,13 @@ thread_create (const char *name, int priority,
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
+
+	//mlfqs 
+	t->nice = thread_current ()->nice;              // 부모의 nice 상속
+	t->recent_cpu = thread_current ()->recent_cpu;  // 부모의 recent_cpu 상속
+	if (thread_mlfqs)
+		mlfqs_calc_priority (t);                    // 인자로 받은 priority 대신 공식으로 계산
+	//mlfqs
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -371,6 +388,9 @@ thread_exit (void) {
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
+	//mlfqs - thread_exit()
+	list_remove (&thread_current ()->all_elem);     // 종료하는 스레드를 all_list에서 제거
+	//mlfqs
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
@@ -436,6 +456,44 @@ thread_get_recent_cpu (void) {
 	/* TODO: Your implementation goes here */
 	return 0;
 }
+
+//mlfqs
+/* priority = PRI_MAX - (recent_cpu / 4) - (nice * 2), 버림, PRI_MIN~PRI_MAX로 자르기 */
+void
+mlfqs_calc_priority (struct thread *t UNUSED) {
+	/* TODO */
+}
+
+/* recent_cpu = (2*load_avg) / (2*load_avg + 1) * recent_cpu + nice */
+void
+mlfqs_calc_recent_cpu (struct thread *t UNUSED) {
+	/* TODO */
+}
+
+/* load_avg = (59/60) * load_avg + (1/60) * ready_threads */
+void
+mlfqs_update_load_avg (void) {
+	/* TODO */
+}
+
+/* 현재 스레드(idle 제외)의 recent_cpu += 1 */
+void
+mlfqs_increment_recent_cpu (void) {
+	/* TODO */
+}
+
+/* all_list를 순회하며 mlfqs_calc_recent_cpu 적용 (idle 제외) */
+void
+mlfqs_update_recent_cpu_all (void) {
+	/* TODO */
+}
+
+/* all_list를 순회하며 mlfqs_calc_priority 적용 (idle 제외) */
+void
+mlfqs_update_priority_all (void) {
+	/* TODO */
+}
+//mlfqs
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -505,6 +563,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->wait_on_lock = NULL;
 	list_init(&(t->donations));
 
+	//mlfqs - init_thread()
+	t->nice = 0;                                // 기본값 (thread_create에서 부모 값으로 덮어씀)
+	t->recent_cpu = 0;                          // 기본값 (thread_create에서 부모 값으로 덮어씀)
+
+	enum intr_level old_level = intr_disable (); // 타이머 인터럽트가 all_list를 순회하므로 보호
+	list_push_back (&all_list, &t->all_elem);   // 모든 스레드 목록에 등록
+	intr_set_level (old_level);
+	//mlfqs
 }
 
 /* 다음에 스케줄링할 스레드를 선택하여 반환합니다. 
