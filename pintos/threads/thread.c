@@ -440,24 +440,14 @@ thread_get_priority (void) {
 /* Sets the current thread's nice value to NICE. */
 void
 thread_set_nice (int nice) {
-	/* TODO: Your implementation goes here */
-	struct thread *t;
-	struct thread *curr = thread_current();
-	struct list_elem *e = list_begin(&ready_list);
+	enum intr_level old_level = intr_disable ();
+	struct thread *curr = thread_current ();
 
 	curr->nice = nice;
+	mlfqs_calc_priority (curr);   // 현재 스레드 우선순위 재계산
 
-	/* 현재 스레드의 우선순위 재계산 */
-	mlfqs_calc_priority(curr);
-
-	/* 우선순위 재계산 후, 현재 스레드보다 우선순위가 높은 스레드가 있다면 CPU 양보 */
-	while(e != list_end(&ready_list)) {
-		t = list_entry(e, struct thread, elem);
-
-		if (t->priority > curr->priority) {
-			thread_yield();
-		}
-	}
+	intr_set_level (old_level);
+	thread_check_preemption ();   // 더 높은 우선순위가 있으면 양보
 }
 
 /* Returns the current thread's nice value. */
