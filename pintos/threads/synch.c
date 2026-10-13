@@ -212,17 +212,22 @@ lock_acquire (struct lock *lock) {
 	enum intr_level old_level = intr_disable ();
 	struct thread *curr = thread_current ();
 
-	curr->wait_on_lock = lock;
+	if (!thread_mlfqs) {
+		curr->wait_on_lock = lock;
 
-	if (lock->holder != NULL) {
-		list_push_back (&lock->holder->donations,
-		               &curr->donation_elem);
-		donate_priority (curr, lock);
+		if (lock->holder != NULL) {
+			list_push_back (&lock->holder->donations,
+						&curr->donation_elem);
+			donate_priority (curr, lock);
+		}
 	}
 
 	sema_down (&lock->semaphore);
-	curr->wait_on_lock = NULL;
-	lock->holder = curr;
+
+	if (!thread_mlfqs)
+		curr->wait_on_lock = NULL;
+
+	lock->holder = curr;	
 
 	intr_set_level (old_level);
 }
@@ -287,22 +292,24 @@ lock_release (struct lock *lock) {
 	struct list_elem *e;
 	struct list_elem *next_e;
 
-	e = list_begin(&t->donations);
-	/* 도네이션 목록 순회 */	
-	while (e != list_end(&t->donations)) {
-		next_e = list_next(e);
-		donor = list_entry(e, struct thread, donation_elem);
-			
-		/* 해당하는 기부자는 목록에서 제거 */
-		if (donor->wait_on_lock == lock) {
-			list_remove(&donor->donation_elem);
+	if (!thread_mlfqs) {
+		e = list_begin(&t->donations);
+		/* 도네이션 목록 순회 */	
+		while (e != list_end(&t->donations)) {
+			next_e = list_next(e);
+			donor = list_entry(e, struct thread, donation_elem);
+				
+			/* 해당하는 기부자는 목록에서 제거 */
+			if (donor->wait_on_lock == lock) {
+				list_remove(&donor->donation_elem);
+			}
+
+			e = next_e;
 		}
-
-		e = next_e;
+			
+		thread_update_priority(t );
 	}
-		 
-	thread_update_priority(t );
-
+	
 	lock->holder = NULL;
 	sema_up (&lock->semaphore);
 	intr_set_level (old_level);
