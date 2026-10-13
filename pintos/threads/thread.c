@@ -87,6 +87,10 @@ static tid_t allocate_tid (void);
 // GDT는 thread_init 이후에 설정되므로, 먼저 임시 GDT를 설정해야 합니다.
 static uint64_t gdt[3] = { 0, 0x00af9a000000ffff, 0x00cf92000000ffff };
 
+
+
+
+
 /* 현재 실행 중인 코드를 스레드로 변환하여 스레딩 시스템을 초기화합니다.
    일반적인 상황에서는 불가능한 작업이지만, loader.S에서 스택의
    바닥(bottom)을 페이지 경계에 맞추도록 세심하게 처리했기 때문에
@@ -414,6 +418,9 @@ thread_yield (void) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
+	if (thread_mlfqs)	/* MLFQS 모드에서는 스케줄러가 우선순위를 계산 */
+		return;
+
 	enum intr_level old_level = intr_disable ();
 	struct thread *curr = thread_current ();
 
@@ -432,15 +439,32 @@ thread_get_priority (void) {
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) {
+thread_set_nice (int nice) {
 	/* TODO: Your implementation goes here */
+	struct thread *t;
+	struct thread *curr = thread_current();
+	struct list_elem *e = list_begin(&ready_list);
+
+	curr->nice = nice;
+
+	/* 현재 스레드의 우선순위 재계산 */
+	mlfqs_calc_priority(curr);
+
+	/* 우선순위 재계산 후, 현재 스레드보다 우선순위가 높은 스레드가 있다면 CPU 양보 */
+	while(e != list_end(&ready_list)) {
+		t = list_entry(e, struct thread, elem);
+
+		if (t->priority > curr->priority) {
+			thread_yield();
+		}
+	}
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
