@@ -204,7 +204,7 @@ thread_create (const char *name, int priority,
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
 
-	//mlfqs 
+	//mlfqs
 	t->nice = thread_current ()->nice;              // 부모의 nice 상속
 	t->recent_cpu = thread_current ()->recent_cpu;  // 부모의 recent_cpu 상속
 	if (thread_mlfqs)
@@ -227,14 +227,14 @@ thread_create (const char *name, int priority,
 	thread_check_preemption();
 	return tid;
 		}
-	
+
 	void
 	thread_check_preemption (void){
 		enum intr_level old_level = intr_disable();
 		struct thread * curr = thread_current();
 		struct list_elem *e;
 		bool should_yield = false;
-	
+
 
 		for ( e = list_begin (&ready_list);
 			e != list_end (&ready_list);
@@ -247,11 +247,11 @@ thread_create (const char *name, int priority,
 				}
 
 			}
-		
+
 		if (should_yield){
 			if(intr_context())
 				intr_yield_on_return();
-		
+
 			else
 				thread_yield();
 		}
@@ -317,10 +317,10 @@ bool thread_wakeup_less(const struct list_elem *a, const struct list_elem *b, vo
     return false;      // 순서를 바꾸지 않음
 }
 
-void 
+void
 sleep_put(int64_t absolute_tick)			// 지정한 시각까지 현재 스레드를 잠들게 하는 함수
 {
-    struct thread *curr 	= thread_current();		// 현재 실행 중인 스레드의 정보를 가져옴  
+    struct thread *curr 	= thread_current();		// 현재 실행 중인 스레드의 정보를 가져옴
     enum intr_level old_level;			 	// 인터럽트 상태를 저장할 변수
     old_level 			= intr_disable();		// 현재 인터럽트 상태를 저장하고 인터럽트를 비활성화
     curr->wakeup_tick 	= absolute_tick;	 	// 현재 스레드의 멤버 변수에 깨어날 시각을 저장
@@ -330,7 +330,7 @@ sleep_put(int64_t absolute_tick)			// 지정한 시각까지 현재 스레드를
 }
 
 void
-sleep_wakeup (int64_t current_tick) 
+sleep_wakeup (int64_t current_tick)
 {
 	struct list_elem *e = list_begin(&sleep_list);  	// 잠든 스레드 목록의 첫 번째 요소를 가져옴
 	while (e != list_end(&sleep_list)) {             	// 목록의 끝에 도달할 때까지 반복
@@ -339,7 +339,7 @@ sleep_wakeup (int64_t current_tick)
 		if (t->wakeup_tick <= current_tick) {       	// 깨어날 시간이 되었는지 확인
 			e = list_remove(e);                     	// 목록에서 제거하고 다음 요소를 가리킴
 			thread_unblock(t);                       	// 스레드를 실행 가능한 상태로 변경
-		} else {	
+		} else {
 			e = list_next(e);                        	// 다음 요소로 이동
 		}
 	}
@@ -446,40 +446,66 @@ thread_get_nice (void) {
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) {
-	/* TODO: Your implementation goes here */
-	return 0;
+	int get_l = fp_mul_int(load_avg,100);
+	get_l = fp_to_int_round(get_l);
+	return get_l;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) {
-	/* TODO: Your implementation goes here */
-	return 0;
+	int get_r = fp_mul_int(thread_current()->recent_cpu,100);
+	get_r = fp_to_int_round(get_r);
+	return get_r;
 }
 
 //mlfqs
 /* priority = PRI_MAX - (recent_cpu / 4) - (nice * 2), 버림, PRI_MIN~PRI_MAX로 자르기 */
 void
 mlfqs_calc_priority (struct thread *t UNUSED) {
-	/* TODO */
+	int priority = fp_div_int(t -> recent_cpu,4);
+	int max_fp = int_to_fp(PRI_MAX);
+	priority = fp_sub(max_fp, priority);
+	priority = fp_sub_int (priority , t -> nice * 2);
+	priority = fp_to_int(priority);
+
+	if ( priority < PRI_MIN){
+		priority = PRI_MIN;
+	}
+	else if ( priority > PRI_MAX){
+		priority = PRI_MAX;
+	}
+	t -> priority = priority;
 }
 
 /* recent_cpu = (2*load_avg) / (2*load_avg + 1) * recent_cpu + nice */
 void
 mlfqs_calc_recent_cpu (struct thread *t UNUSED) {
-	/* TODO */
+	int twice_load = fp_mul_int(load_avg,2);
+	int denominator = fp_add_int(twice_load,1);
+	int coeff = fp_div (twice_load,denominator);
+	int scaled_cpu = fp_mul(coeff, t->recent_cpu);
+	t->recent_cpu = fp_add_int(scaled_cpu,t->nice);
 }
 
 /* load_avg = (59/60) * load_avg + (1/60) * ready_threads */
 void
 mlfqs_update_load_avg (void) {
-	/* TODO */
+	int nums = list_size(&ready_list);
+	struct thread * cur = thread_current();
+	if ( cur != idle_thread){
+		nums += 1;
+	}
+	int coeff = fp_div_int(int_to_fp(59),60);
+	int old_part = fp_mul(coeff, load_avg);
+	int new_part = fp_div_int(int_to_fp(nums),60);
+	load_avg = old_part + new_part;
 }
 
 /* 현재 스레드(idle 제외)의 recent_cpu += 1 */
 void
 mlfqs_increment_recent_cpu (void) {
-	/* TODO */
+
 }
 
 /* all_list를 순회하며 mlfqs_calc_recent_cpu 적용 (idle 제외) */
@@ -573,8 +599,8 @@ init_thread (struct thread *t, const char *name, int priority) {
 	//mlfqs
 }
 
-/* 다음에 스케줄링할 스레드를 선택하여 반환합니다. 
-실행 큐(run queue)가 비어 있지 않다면 실행 큐에서 스레드를 반환해야 합니다. 
+/* 다음에 스케줄링할 스레드를 선택하여 반환합니다.
+실행 큐(run queue)가 비어 있지 않다면 실행 큐에서 스레드를 반환해야 합니다.
 (현재 실행 중인 스레드가 계속 실행될 수 있는 상태라면,
 해당 스레드도 실행 큐에 포함되어 있을 것입니다.)
 실행 큐가 비어 있다면 idle_thread를 반환합니다. */
@@ -582,7 +608,7 @@ static struct thread *
 next_thread_to_run (void) {
 	struct list_elem *best;
 	struct list_elem *e;
-	
+
 	if (list_empty (&ready_list))
 		return idle_thread;
 	else {
@@ -595,7 +621,7 @@ next_thread_to_run (void) {
 
 			if (candidate -> priority > winner -> priority){
 				best = e;
-				
+
 			}
 		}
 	}
@@ -737,9 +763,9 @@ schedule (void) {
 #endif
 
 	if (curr != next) {
-/* 전환하기 전의 스레드가 종료되는 중이라면 해당 스레드의 구조체(struct thread)를 파괴해야 합니다. 
-단, thread_exit()가 실행 도중 자신의 기반을 무너뜨리는 상황을 피하기 위해 이 작업은 마지막 단계에서 수행되어야 합니다. 
-현재 해당 페이지가 스택으로 사용 중이므로, 여기서는 페이지 해제 요청을 큐에 넣기만 합니다. 
+/* 전환하기 전의 스레드가 종료되는 중이라면 해당 스레드의 구조체(struct thread)를 파괴해야 합니다.
+단, thread_exit()가 실행 도중 자신의 기반을 무너뜨리는 상황을 피하기 위해 이 작업은 마지막 단계에서 수행되어야 합니다.
+현재 해당 페이지가 스택으로 사용 중이므로, 여기서는 페이지 해제 요청을 큐에 넣기만 합니다.
 실제 파괴 로직은 schedule()의 시작 부분에서 호출될 것입니다. */
 		if (curr && curr->status == THREAD_DYING && curr != initial_thread) {
 			ASSERT (curr != next);
