@@ -158,33 +158,121 @@ error:
 	thread_exit ();
 }
 
-/* Switch the current execution context to the f_name.
- * Returns -1 on fail. */
+/* 기존 프로세스를 정리하고 새 실행 파일을 적재한 뒤 명령줄 인자를 전달하여 사용자 프로그램 실행 */
 int
-process_exec (void *f_name) {
-	char *file_name = f_name;
-	bool success;
+process_exec (void *f_name) { // B
+    char *file_name = f_name;
+    bool success;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
-	struct intr_frame _if;
-	_if.ds = _if.es = _if.ss = SEL_UDSEG;
-	_if.cs = SEL_UCSEG;
-	_if.eflags = FLAG_IF | FLAG_MBS;
+    /* 사용자 모드 실행 환경 설정 */
+    struct intr_frame _if;
+    _if.ds = _if.es = _if.ss = SEL_UDSEG;
+    _if.cs = SEL_UCSEG;
+    _if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
-	process_cleanup ();
+    /* 기존 프로세스 메모리 정리 */
+    process_cleanup ();
 
-	/* And then load the binary */
-	success = load (file_name, &_if);
+    /* 명령줄 복사용 메모리 할당 */
+    char *cmd_copy = palloc_get_page(0);
 
-	/* If load failed, quit. */
-	palloc_free_page (file_name);
-	if (!success)
-		return -1;
+    /* 메모리 할당 실패 시 종료 */
+    if (cmd_copy == NULL) {
+        palloc_free_page(file_name);
+        return -1;
+    }
 
-	/* Start switched process. */
+    /* 원본 명령줄 복사 */
+    strlcpy(cmd_copy, file_name, PGSIZE);
+
+    /* 실행 파일 이름 추출 */
+    char *save_p;
+    char *program_name = strtok_r(cmd_copy, " ", &save_p);
+
+    /* 실행 파일 이름 없으면 종료 */
+    if (program_name == NULL) {//메모리를 해제하지 않을 시 메모리 누수 발생 (트러블 슈팅 후보1)
+    palloc_free_page(cmd_copy);
+    palloc_free_page(file_name);
+    return -1;
+}
+
+    /* 실행 파일 메모리에 적재 */
+    success = load(program_name, &_if);
+
+    /* 명령줄 복사본 메모리 해제 */
+    palloc_free_page(cmd_copy);
+
+    /* 적재 실패 시 메모리 해제 후 종료 */
+    if (!success) {
+        palloc_free_page(file_name);
+        return -1;
+    }
+
+//-----------------------------여기부터 Ai에게 Help 요청ㅜㅜ
+/* 명령줄 인자 저장 배열 및 개수 초기화 */
+    char *argv[128];
+    int argc = 0;
+
+    /* 인자 분리용 변수 선언 */
+    char *token;
+    char *arg_save_p;
+
+    /* 명령줄을 공백 기준으로 분리 */
+    for (token = strtok_r(file_name, " ", &arg_save_p);
+         token != NULL;
+         token = strtok_r (NULL, " ", &arg_save_p)) {
+
+        /* 인자 개수 초과 시 종료 */
+        if (argc >= 128) {
+            palloc_free_page(file_name);
+            return -1;
+        }
+
+        /* 분리한 인자 저장 및 개수 증가 */
+        argv[argc++] = token;
+    }
+
+    /* 인자 문자열의 사용자 스택 주소 저장 */
+    char *arg_addresses[128];
+
+    /* 인자 문자열을 사용자 스택에 역순 복사 */
+    for (int i = argc - 1; i >= 0; i--) {
+        size_t len = strlen(argv[i]) + 1;
+
+        _if.rsp -= len;
+        memcpy ((void *) _if.rsp, argv[i], len);
+
+        arg_addresses[i] = (char *) _if.rsp;
+    }
+
+    /* 스택을 8바이트 경계에 정렬 */
+    _if.rsp &= ~((uint64_t) 7);
+
+    /* argv 배열의 마지막 NULL 포인터 저장 */
+    _if.rsp -= sizeof (char *);
+    *(char **) _if.rsp = NULL;
+
+    /* argv 포인터들을 역순으로 스택에 저장 */
+    for (int i = argc - 1; i >= 0; i--) {
+        _if.rsp -= sizeof(char *);
+        *(char **) _if.rsp = arg_addresses[i];
+    }
+
+    /* argv 배열의 시작 주소 저장 */
+    char **argv_address = (char **) _if.rsp;
+
+    /* argc와 argv 주소를 CPU 레지스터에 전달 */
+    _if.R.rdi = argc;
+    _if.R.rsi = (uint64_t) argv_address;
+
+    /* 가짜 반환 주소를 스택에 저장 */
+    _if.rsp -= sizeof(void *);
+    *(uint64_t *) _if.rsp = 0;
+
+    /* 사용이 끝난 명령줄 메모리 해제 */
+    palloc_free_page(file_name);
+
+	/* 사용자 프로세스 실행 */
 	do_iret (&_if);
 	NOT_REACHED ();
 }
@@ -233,14 +321,10 @@ process_cleanup (void) {
 	 * to the kernel-only page directory. */
 	pml4 = curr->pml4;
 	if (pml4 != NULL) {
-		/* Correct ordering here is crucial.  We must set
-		 * cur->pagedir to NULL before switching page directories,
-		 * so that a timer interrupt can't switch back to the
-		 * process page directory.  We must activate the base page
-		 * directory before destroying the process's page
-		 * directory, or our active page directory will be one
-		 * that's been freed (and cleared). */
-		curr->pml4 = NULL;
+		/* 현재 스레드가 소유한 페이지 디렉터리 포인터를 먼저 NULL로 변경
+		아래에서 다른 페이지 디렉터리로 전환하는 동안 타이머 인터럽트가 발생해도
+		스케줄러가 이미 해제할 페이지 디렉터리로 다시 전환하지 않도록 */
+		curr->pml4 = NULL;//페이지 테이블 연결 해제
 		pml4_activate (NULL);
 		pml4_destroy (pml4);
 	}
