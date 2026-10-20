@@ -14,7 +14,7 @@
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
-
+static void syscall_exit(struct intr_frame *f UNUSED);
 /* System call.
  *
  * Previously system call services was handled by the interrupt handler
@@ -50,44 +50,29 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			if(f->R.rdi != 0 && is_user_vaddr((const char *)f->R.rdi))
 			{
 				void *page = pml4_get_page (thread_current()->pml4, (const char *)f->R.rdi);
-				if(page == NULL)
-				{
-					f->R.rax = -1;
-					if (thread_current ()->child_status != NULL)
-						thread_current ()->child_status->exit_status = (int) f->R.rax;
-					thread_exit ();
-				}
+				if(page == NULL) syscall_exit(f);
 
 				const char *rdiChar = (const char *)f->R.rdi;
 				for(int i = 0;; i++)
 				{
 					if(!is_user_vaddr(rdiChar + i))
 					{
-						f->R.rax = -1;
-						if (thread_current ()->child_status != NULL)
-							thread_current ()->child_status->exit_status = (int) f->R.rax;
-						thread_exit ();
+						syscall_exit(f);
 					}
 					else 
 					{
 						void *page2 = pml4_get_page (thread_current()->pml4, rdiChar + i);
-						if(page2 == NULL)
-						{
-							f->R.rax = -1;
-							if (thread_current ()->child_status != NULL)
-								thread_current ()->child_status->exit_status = (int) f->R.rax;
-							thread_exit ();
-						}
-						if(rdiChar[i] == '\0') break;
+						if (page2 == NULL) syscall_exit(f);
+						if (rdiChar[i] == '\0') break;
 					}
 				}
 				struct file *file = filesys_open(rdiChar);
 				if (file != NULL)
 				{
-					bool isSave=false;
-					for(int i = 2; i<FD_TABLE_SIZE;i++)
+					bool isSave = false;
+					for (int i = 2; i < FD_TABLE_SIZE; i++)
 					{
-						if(thread_current()->fd_Table[i] == NULL)
+						if (thread_current()->fd_Table[i] == NULL)
 						{	
 							thread_current()->fd_Table[i] = file;
 							f->R.rax = i;
@@ -95,7 +80,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 							break;
 						}							
 					}					
-					if(!isSave)
+					if (!isSave)
 					{
 						file_close(file);
 						f->R.rax = -1;
@@ -105,10 +90,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax = -1;
 				return;
 			}
-			f->R.rax = -1;
-			if (thread_current ()->child_status != NULL)
-				thread_current ()->child_status->exit_status = (int) f->R.rax;
-			thread_exit ();
+
+			syscall_exit(f);
 			break;
 		case SYS_HALT:
 			power_off ();
@@ -121,16 +104,18 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			f->R.rax = process_wait ((tid_t) f->R.rdi);
 			return;
 		case SYS_WRITE:
-			if(f->R.rdi == 1)
+			if (f->R.rdi == 1)
 			{
 				// 출력할 바이트가 없을 때
-				if (f->R.rdx == 0) {
+				if (f->R.rdx == 0) 
+				{
 					f->R.rax = 0;
 					return;
 				}
 
 				// 마지막 바이트 주소(buffer + size - 1)의 오버플로 검사
-				if (f->R.rdx - 1 > UINT64_MAX - f->R.rsi) {
+				if (f->R.rdx - 1 > UINT64_MAX - f->R.rsi) 
+				{
 					if (thread_current ()->child_status != NULL)
 						thread_current ()->child_status->exit_status = -1;
 					thread_exit ();
@@ -161,14 +146,18 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				}				
 			}
 
-			f->R.rax = -1;
-			if (thread_current ()->child_status != NULL)
-				thread_current ()->child_status->exit_status = (int) f->R.rax;
-			thread_exit ();
+			syscall_exit(f);
 			return;
 		default:
 			break;
 	}
 	printf ("system call!\n");
+	thread_exit ();
+}
+static void syscall_exit(struct intr_frame *f UNUSED)
+{
+	f->R.rax = -1;
+	if (thread_current ()->child_status != NULL)
+		thread_current ()->child_status->exit_status = (int) f->R.rax;
 	thread_exit ();
 }
