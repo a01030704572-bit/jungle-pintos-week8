@@ -623,6 +623,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 #ifdef USERPROG
 	list_init (&t->children);
 	t->child_status = NULL;
+	t->fd_Table = NULL;
 #endif
 
 	//mlfqs - init_thread()

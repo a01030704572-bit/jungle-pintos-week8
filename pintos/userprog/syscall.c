@@ -9,6 +9,7 @@
 #include "userprog/gdt.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
+#include "filesys/file.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -44,6 +45,70 @@ void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
 	switch (f->R.rax) {
+		case SYS_OPEN:
+			if(f->R.rdi != 0 && is_user_vaddr((const char *)f->R.rdi))
+			{
+				void *page = pml4_get_page (thread_current()->pml4, (const char *)f->R.rdi);
+				if(page == NULL)
+				{
+					f->R.rax = -1;
+					if (thread_current ()->child_status != NULL)
+						thread_current ()->child_status->exit_status = (int) f->R.rax;
+					thread_exit ();
+				}
+
+				const char *rdiChar = (const char *)f->R.rdi;
+				for(int i = 0;; i++)
+				{
+					if(!is_user_vaddr(rdiChar + i))
+					{
+						f->R.rax = -1;
+						if (thread_current ()->child_status != NULL)
+							thread_current ()->child_status->exit_status = (int) f->R.rax;
+						thread_exit ();
+					}
+					else 
+					{
+						void *page2 = pml4_get_page (thread_current()->pml4, rdiChar + i);
+						if(page2 == NULL)
+						{
+							f->R.rax = -1;
+							if (thread_current ()->child_status != NULL)
+								thread_current ()->child_status->exit_status = (int) f->R.rax;
+							thread_exit ();
+						}
+						if(rdiChar[i] == '\0') break;
+					}
+				}
+				struct file *file = filesys_open(rdiChar);
+				if (file != NULL)
+				{
+					bool isSave=false;
+					for(int i = 2; i<FD_TABLE_SIZE;i++)
+					{
+						if(thread_current()->fd_Table[i] == NULL)
+						{	
+							thread_current()->fd_Table[i] = file;
+							f->R.rax = i;
+							isSave = true;
+							break;
+						}							
+					}					
+					if(!isSave)
+					{
+						file_close(file);
+						f->R.rax = -1;
+					}
+					return;
+				}
+				f->R.rax = -1;
+				return;
+			}
+			f->R.rax = -1;
+			if (thread_current ()->child_status != NULL)
+				thread_current ()->child_status->exit_status = (int) f->R.rax;
+			thread_exit ();
+			break;
 		case SYS_HALT:
 			power_off ();
 			break;
