@@ -177,6 +177,36 @@ case SYS_OPEN: {
     f->R.rax = fd;
     break;
 		}
+		case SYS_READ: {
+			uint64_t fd_RIndex = f->R.rdi;
+			if(thread_current()->fd_table != NULL && fd_RIndex >= 2 && fd_RIndex < FD_TABLE_SIZE)
+			{
+				if(thread_current()->fd_table[fd_RIndex] != NULL)
+				{
+					// read-bad-ptr: 요청 범위 전체와 쓰기 권한 검사
+					check_buffer ((void *) f->R.rsi, (unsigned) f->R.rdx, true);
+
+				}
+				f->R.rax = -1;
+				return;
+			}
+			f->R.rax = -1;
+			return;
+		}
+		case SYS_CLOSE: {
+			 uint64_t fd_Index = f->R.rdi;
+			 if(thread_current()->fd_table != NULL && fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+			 {
+				if(thread_current()->fd_table[fd_Index] != NULL)
+				{
+					lock_acquire (&filesys_lock);
+					file_close(thread_current()->fd_table[fd_Index]);
+					thread_current()->fd_table[fd_Index] = NULL;
+					lock_release (&filesys_lock);
+				}
+			 }
+			return;
+		}
     case SYS_HALT:
         power_off ();
         return;
