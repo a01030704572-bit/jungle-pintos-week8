@@ -69,24 +69,26 @@ exception_print_stats (void) {
 /* Handler for an exception (probably) caused by a user process. */
 static void
 kill (struct intr_frame *f) {
-	/* This interrupt is one (probably) caused by a user process.
-	   For example, the process might have tried to access unmapped
-	   virtual memory (a page fault).  For now, we simply kill the
-	   user process.  Later, we'll want to handle page faults in
-	   the kernel.  Real Unix-like operating systems pass most
-	   exceptions back to the process via signals, but we don't
-	   implement them. */
+	/* 이 인터럽트는 (아마도) 사용자 프로세스에 의해 발생한 것일 수 있습니다.
+   예를 들어, 프로세스가 매핑되지 않은 가상 메모리에 접근하려 했을 경우(페이지 폴트)가 이에 해당합니다.
+   현재로서는 단순히 해당 사용자 프로세스를 종료(kill)합니다.
+   추후에는 커널 차원에서 페이지 폴트를 처리하도록 구현할 예정입니다.
+   실제 유닉스 계열 운영체제에서는 대부분의 예외를 시그널(signal)을 통해 프로세스로 전달하지만,
+   현재 우리 시스템에는 시그널 기능이 구현되어 있지 않습니다. */
 
 	/* The interrupt frame's code segment value tells us where the
 	   exception originated. */
 	switch (f->cs) {
 		case SEL_UCSEG:
-			/* User's code segment, so it's a user exception, as we
-			   expected.  Kill the user process.  */
-			printf ("%s: dying due to interrupt %#04llx (%s).\n",
-					thread_name (), f->vec_no, intr_name (f->vec_no));
-			intr_dump_frame (f);
-			thread_exit ();
+     /* 사용자 예외 발생 시 종료 상태를 -1로 설정 */
+    thread_current()->exit_status = -1;
+
+    /* 현재 사용자 프로세스 종료 */
+    thread_exit ();
+			// printf ("%s: dying due to interrupt %#04llx (%s).\n",
+			// 		thread_name (), f->vec_no, intr_name (f->vec_no));
+			// intr_dump_frame (f);
+			// thread_exit ();
 
 		case SEL_KCSEG:
 			/* Kernel's code segment, which indicates a kernel bug.
@@ -105,17 +107,14 @@ kill (struct intr_frame *f) {
 	}
 }
 
-/* Page fault handler.  This is a skeleton that must be filled in
-   to implement virtual memory.  Some solutions to project 2 may
-   also require modifying this code.
-
-   At entry, the address that faulted is in CR2 (Control Register
-   2) and information about the fault, formatted as described in
-   the PF_* macros in exception.h, is in F's error_code member.  The
-   example code here shows how to parse that information.  You
-   can find more information about both of these in the
-   description of "Interrupt 14--Page Fault Exception (#PF)" in
-   [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
+/* 페이지 폴트 핸들러(Page fault handler)입니다. 
+가상 메모리를 구현하기 위해 내용을 채워 넣어야 하는 기본 틀(skeleton)입니다. 
+프로젝트 2의 일부 해결 방안에서는 이 코드를 수정해야 할 수도 있습니다.
+핸들러가 호출될 때, 페이지 폴트가 발생한 주소는 CR2(Control Register 2) 레지스터에 저장되며, 
+폴트와 관련된 정보는 `exception.h` 파일 내 `PF_*` 매크로에 정의된 형식으로 `f->error_code` 멤버에 담겨 전달됩니다. 
+여기에 제시된 예제 코드는 해당 정보를 어떻게 해석(파싱)하는지 보여줍니다. 
+이와 관련된 더 자세한 내용은 [IA32-v3a] 문서의 5.15절 "Exception and Interrupt Reference"에 있는 
+"Interrupt 14--Page Fault Exception (#PF)" 항목에서 확인할 수 있습니다. */
 static void
 page_fault (struct intr_frame *f) {
 	bool not_present;  /* True: not-present page, false: writing r/o page. */
@@ -130,10 +129,8 @@ page_fault (struct intr_frame *f) {
 
 	fault_addr = (void *) rcr2();
 
-	/* Turn interrupts back on (they were only off so that we could
-	   be assured of reading CR2 before it changed). */
+	/* 인터럽트 켜기 */
 	intr_enable ();
-
 
 	/* Determine cause. */
 	not_present = (f->error_code & PF_P) == 0;

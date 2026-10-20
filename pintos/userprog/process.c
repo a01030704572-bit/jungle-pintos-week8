@@ -18,6 +18,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "userprog/syscall.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -295,14 +296,18 @@ process_wait (tid_t child_tid UNUSED) {
 	return -1;
 }
 
-/* Exit the process. This function is called by thread_exit (). */
-void
+/* 프로세스 종료 시 호출되어 종료 상태 출력 및 자원 정리 수행 */
 process_exit (void) {
 	struct thread *curr = thread_current ();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
+	/* TODO: 여기에 코드를 작성하세요.
+	 * TODO: 프로세스 종료 메시지를 구현하세요(project2/process_termination.html 참조).
+	 * TODO: 이곳에서 프로세스 자원 정리(cleanup)를 구현하는 것을 권장합니다. */
+
+	/* 사용자 프로세스의 종료 상태 출력 */
+	printf ("%s: exit(%d)\n", curr->name, curr->exit_status);
+
+	/* 열린 파일 전부 정리 */
+    syscall_close_all_files();
 
 	process_cleanup ();
 }
