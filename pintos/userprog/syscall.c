@@ -21,7 +21,6 @@
 /* 사용자 메모리 주소 검사 */
 #include "threads/vaddr.h"
 
-
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 static void terminate (int status) NO_RETURN;
@@ -98,8 +97,6 @@ check_user_string(const char *str) {
 static int
 allocate_fd(struct file *file) {
     struct thread *curr = thread_current();
-
-    if(curr->fd_table == NULL) return -1;
 
     /* 0과 1은 표준 입출력용으로 예약 */
     for(int fd = 2; fd < FD_TABLE_SIZE; fd++) {
@@ -179,7 +176,7 @@ case SYS_OPEN: {
 		}
 		case SYS_READ: {
 			uint64_t fd_RIndex = f->R.rdi;
-			if(thread_current()->fd_table != NULL && fd_RIndex >= 2 && fd_RIndex < FD_TABLE_SIZE)
+			if(fd_RIndex >= 2 && fd_RIndex < FD_TABLE_SIZE)
 			{
 				if(thread_current()->fd_table[fd_RIndex] != NULL)
 				{
@@ -195,7 +192,7 @@ case SYS_OPEN: {
 		}
 		case SYS_CLOSE: {
 			 uint64_t fd_Index = f->R.rdi;
-			 if(thread_current()->fd_table != NULL && fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+			 if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
 			 {
 				if(thread_current()->fd_table[fd_Index] != NULL)
 				{
@@ -286,4 +283,3 @@ write_console (int fd, const void *buffer, unsigned size) {
 	putbuf (buffer, size);
 	return size;
 }
-

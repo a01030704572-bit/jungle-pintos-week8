@@ -1,5 +1,4 @@
 #include "userprog/process.h"
-#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -20,6 +19,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "userprog/syscall.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -229,34 +229,45 @@ process_exec (void *f_name) {
 	bool success;
 
 	/* Keep the new user context separate from the scheduler's frame. */
+	/* 사용자 모드 실행 환경 설정 */
 	struct intr_frame _if = {0};
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+	/* 기존 프로세스 메모리 정리 */
 	process_cleanup ();
 
+	/* 명령줄 인자 저장 배열 및 개수 초기화 */
 	/* 128개 인자 배열은 작은 커널 스택 대신 임시 힙에 둔다. */
 	char **words = malloc (2 * 128 * sizeof *words);
+	/* 메모리 할당 실패 시 종료 */
 	if (words == NULL)
 		goto fail;
+	/* 인자 문자열의 사용자 스택 주소 저장 */
 	char **ad = words + 128;
 
+	/* 인자 분리용 변수 선언 */
 	char *a = NULL;
+	/* 실행 파일 이름 추출 */
 	char *b = strtok_r (file_name, " ", &a);
 	int c = 0;
 	size_t string_bytes = 0;
 
+	/* 명령줄을 공백 기준으로 분리 */
 	while (b != NULL) {
+		/* 인자 개수 초과 시 종료 */
 		if (c >= 128)
 			goto fail;
 		size_t len = strlen (b) + 1;
 		if (len > PGSIZE - string_bytes)
 			goto fail;
+		/* 분리한 인자 저장 및 개수 증가 */
 		words[c++] = b;
 		string_bytes += len;
 		b = strtok_r (NULL, " ", &a);
 	}
+	/* 실행 파일 이름 없으면 종료 */
 	if (c == 0)
 		goto fail;
 
@@ -267,10 +278,13 @@ process_exec (void *f_name) {
 	if (aligned_bytes > PGSIZE - pointer_bytes)
 		goto fail;
 
+	/* 실행 파일 메모리에 적재 */
 	success = load (words[0], &_if);
+	/* 적재 실패 시 메모리 해제 후 종료 */
 	if (!success)
 		goto fail;
 
+	/* 인자 문자열을 사용자 스택에 역순 복사 */
 	for (int i = c - 1; i >= 0; i--) {
 		size_t len = strlen (words[i]) + 1;
 		_if.rsp -= len;
@@ -278,17 +292,23 @@ process_exec (void *f_name) {
 		ad[i] = (char *) _if.rsp;
 	}
 
+	/* 스택을 8바이트 경계에 정렬 */
 	size_t padding = aligned_bytes - string_bytes;
 	_if.rsp -= padding;
 	memset ((void *) _if.rsp, 0, padding);
+	/* argv 배열의 마지막 NULL 포인터 저장 */
 	_if.rsp -= sizeof (char *);
 	memset ((void *) _if.rsp, 0, sizeof (char *));
+	/* argv 포인터들을 역순으로 스택에 저장 */
 	for (int i = c - 1; i >= 0; i--) {
 		_if.rsp -= sizeof (char *);
 		memcpy ((void *) _if.rsp, &ad[i], sizeof (char *));
 	}
+	/* argc와 argv 주소를 CPU 레지스터에 전달 */
 	_if.R.rdi = c;
+	/* argv 배열의 시작 주소 저장 */
 	_if.R.rsi = _if.rsp;
+	/* 가짜 반환 주소를 스택에 저장 */
 	_if.rsp -= sizeof (void *);
 	memset ((void *) _if.rsp, 0, sizeof (void *));
 
@@ -296,7 +316,9 @@ process_exec (void *f_name) {
 	strlcpy (thread_current ()->name, words[0],
 			sizeof thread_current ()->name);
 	free (words);
+	/* 사용이 끝난 명령줄 메모리 해제 */
 	palloc_free_page (file_name);
+	/* 사용자 프로세스 실행 */
 	do_iret (&_if);
 	NOT_REACHED ();
 

@@ -50,8 +50,8 @@ worktree: C:\Users\nica7\.codex\worktrees\p2-integrate-pr10-14\jungle-pintos-wee
   검증은 파일 시스템 잠금을 잡기 전에 끝난다.
 
 - allocate_fd / syscall_close_all_files: #14의 함수, 이름, 설명, 흐름을 유지한다.
-  차이는 NULL 테이블 검사와 128 상수를 FD_TABLE_SIZE로 바꾼 부분뿐이다.
-  이 사실은 함수 본문 비교로 검증했다.
+  allocate_fd는 128 상수를 FD_TABLE_SIZE로 바꾼 것만 남겼다.
+  syscall_close_all_files는 초기화 실패 경로에 필요한 NULL 테이블 검사도 유지한다.
 
 - exit_status: #14의 thread->exit_status를 실행 중 종료값으로 유지한다.
   process_exit에서 이 값을 #11의 child_status->exit_status에 복사한 뒤
@@ -157,3 +157,36 @@ C:\Users\nica7\.codex\worktrees\p2-integrate-pr10-14\validation\human-first
 원래 커밋 계보를 보존하려면 merge commit 방식으로 반영한 다음,
 #10~#14의 GitHub 상태를 확인하고 아직 열린 PR만 통합 PR 링크로 정리한다.
 이미 포함된 PR을 개별적으로 다시 병합하지 않는다. #9는 그대로 둔다.
+
+
+주석 및 최소 변경 정리 (2026-10-20, 이 문서를 포함한 커밋)
+
+사용자 요청에 따라 #14 process_exec의 유효한 설명 주석 22개를 복원했다.
+현재 존재하지 않는 cmd_copy의 할당/복사/해제 설명 3개는 복원하지 않았다.
+#10의 인자 파싱/용량 확인/스택 구성/실패 정리 코드는 그대로 유지한다.
+#14 syscall 구조와 설명도 유지하며, allocate_fd / SYS_READ / SYS_CLOSE의
+중복 테이블 NULL 검사만 제거했다. syscall_close_all_files의 NULL 검사는
+초기화 실패와 테이블 없는 스레드의 종료 정리를 위해 남겼다.
+process.c의 syscall.h include 위치를 #14 원래 위치로 되돌렸고,
+syscall.c에 추가했던 불필요한 빈 줄 두 개를 제거했다.
+주석과 공백을 제외한 비교에서 process.c는 include 위치만 바뀌었고,
+syscall.c는 위 세 검사 제거 외에 실행 코드 변경이 없음을 확인했다.
+
+검증은 기존 결과를 재사용하지 않고 별도 새 디렉터리에서 실행했다.
+컨테이너: d809dc0b2e61
+소스/빌드: /tmp/p2-human-first-cleanup-20261020
+공식 테스트, checker, 기대 출력과 개인 개발 설정은 변경하지 않았다.
+새 빌드 및 공식 Make .result / .ck 실행: 44개 중 36 PASS, 8 FAIL.
+PASS/FAIL 집합은 위 목록 및 이전 실행과 동일하다.
+FAIL 출력도 확인했으며 read-normal은 미구현 파일 read의 -1 반환,
+write 4개는 미지원 파일 write, wait 3개는 fork 미지원에 따른 자식 부재다.
+정상 자식 종료값 수집을 포함한 wait 전체를 검증 완료로 표시하지 않는다.
+실제 process_exec 추출 호스트 검사: 10/10 PASS (로더/스케줄러 stub).
+보조 QEMU 검사: 11/11 PASS. 버퍼 경계, FD 소진/재사용, 오류 후 파일
+작업 재개와 종료 메시지를 확인했다. 전체 627개 소스가 테스트 전후 동일하다.
+
+최신 실행 자료:
+C:\Users\nica7\.codex\worktrees\p2-integrate-pr10-14\validation\human-first-cleanup
+- preservation-audit.txt: 복원 주석 및 실행 코드 변경 범위 검사
+- source-manifest.json: 이번 실행에 사용한 Pintos 추적 파일 SHA-256
+- evidence/: 새 빌드와 공식 checker 결과 및 보조 검사 로그
