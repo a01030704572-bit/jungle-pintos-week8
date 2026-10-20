@@ -52,6 +52,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			{
 				if(thread_current()->fd_Table[fd_RIndex] != NULL)
 				{
+					// read-bad-ptr				
+					uint64_t start = pg_round_down(f->R.rsi);
+					if(!is_user_vaddr((const char *)start)) syscall_exit(f);
+
+					void *parent_page = pml4_get_page (thread_current()->pml4, (const char *)start);
+					if(parent_page == NULL) syscall_exit(f);					
+					
 				}
 				f->R.rax = -1;
 				return;
