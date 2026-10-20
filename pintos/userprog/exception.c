@@ -85,7 +85,7 @@ kill (struct intr_frame *f) {
 			   expected.  Kill the user process.  */
 			printf ("%s: dying due to interrupt %#04llx (%s).\n",
 					thread_name (), f->vec_no, intr_name (f->vec_no));
-			intr_dump_frame (f);
+			//intr_dump_frame (f);
 			thread_exit ();
 
 		case SEL_KCSEG:
