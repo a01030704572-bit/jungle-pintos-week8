@@ -3,7 +3,9 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/init.h"
 #include "threads/loader.h"
+#include "userprog/process.h"
 #include "userprog/gdt.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
@@ -41,6 +43,66 @@ syscall_init (void) {
 void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
+	switch (f->R.rax) {
+		case SYS_HALT:
+			power_off ();
+			break;
+		case SYS_EXIT:
+			if (thread_current ()->child_status != NULL)
+				thread_current ()->child_status->exit_status = (int) f->R.rdi;
+			thread_exit ();
+		case SYS_WAIT:
+			f->R.rax = process_wait ((tid_t) f->R.rdi);
+			return;
+		case SYS_WRITE:
+			if(f->R.rdi == 1)
+			{
+				// 출력할 바이트가 없을 때
+				if (f->R.rdx == 0) {
+					f->R.rax = 0;
+					return;
+				}
+
+				// 마지막 바이트 주소(buffer + size - 1)의 오버플로 검사
+				if (f->R.rdx - 1 > UINT64_MAX - f->R.rsi) {
+					if (thread_current ()->child_status != NULL)
+						thread_current ()->child_status->exit_status = -1;
+					thread_exit ();
+				}
+				uint64_t start = pg_round_down(f->R.rsi);
+				uint64_t last = pg_round_down(f->R.rsi + f->R.rdx - 1);
+
+				bool isvalid = true;
+				// 모든 페이지 검사
+				for (;start <= last; start += PGSIZE)
+				{
+					isvalid = is_user_vaddr((const char *)start);
+					if(!isvalid) break;
+
+					void *parent_page = pml4_get_page (thread_current()->pml4, (const char *)start);
+					if(parent_page == NULL)
+					{
+						isvalid = false;
+						break;
+					}
+				}
+				// 출력한 바이트 수 반환
+				if (isvalid)
+				{
+					putbuf((const char *)f->R.rsi, f->R.rdx);
+					f->R.rax = f->R.rdx;
+					return;
+				}				
+			}
+
+			f->R.rax = -1;
+			if (thread_current ()->child_status != NULL)
+				thread_current ()->child_status->exit_status = (int) f->R.rax;
+			thread_exit ();
+			return;
+		default:
+			break;
+	}
 	printf ("system call!\n");
 	thread_exit ();
 }
