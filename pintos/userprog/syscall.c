@@ -46,6 +46,17 @@ void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
 	switch (f->R.rax) {
+		case SYS_CLOSE:
+			 uint64_t fd_Index = f->R.rdi;
+			 if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+			 {
+				if(thread_current()->fd_Table[fd_Index] != NULL)
+				{
+					file_close(thread_current()->fd_Table[fd_Index]);
+					thread_current()->fd_Table[fd_Index] = NULL;
+				}
+			 }
+			return;
 		case SYS_OPEN:
 			if(f->R.rdi != 0 && is_user_vaddr((const char *)f->R.rdi))
 			{
