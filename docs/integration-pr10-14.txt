@@ -1,0 +1,159 @@
+PR #10/#14 우선 통합 기록 (2026-10-20, Asia/Seoul)
+
+사용자가 #10과 #14의 코드 구조와 설명을 우선 보존하도록 기준을 수정했다.
+실제 작성자를 코드만으로 확정하지 않고, 사용자가 지정한 PR 우선순위를 적용했다.
+
+브랜치: codex/p2-human-first
+코드 통합 커밋: ba248c5
+기준 develop: 8997c07ba8ee3b8fab5459a7a5068cf6f5542499
+worktree: C:\Users\nica7\.codex\worktrees\p2-integrate-pr10-14\jungle-pintos-week8
+
+이전 결과 codex/p2-integrate-pr10-14 / e631e54는 별도 브랜치로 보존했다.
+원본 C:\Github\jungle-pintos-week8의 ch-kwon / 76db4c0도 변경하지 않았다.
+원격 push, PR 병합/닫기, base 변경은 수행하지 않았다.
+
+실제 반영 순서
+
+1. 최신 develop에서 새 브랜치 생성.
+2. #14 head f6e863e를 fast-forward로 반영 (4cb0475, f6e863e).
+3. #10 head 8c94887을 병합: 87189f2.
+4. #11/#12가 조상으로 포함된 #13 head 76db4c0을 병합: ba248c5.
+이번에는 이 순서를 첫 부모 이력에 그대로 남겼다.
+
+#11 head: 6391300, base: develop
+#12 head: 38cf1b5, base: codex/userprog-process-basics (#11)
+#13 head: 76db4c0, base: codex/userprog-open-close (#12)
+#10/#14 base: develop
+원격 fetch로 develop과 각 head가 이전 확인 이후 바뀌지 않았음을 확인했다.
+#9의 마지막 REST 확인은 closed/unmerged이며, 대상에 포함하지 않았다.
+
+함수별 보존 기준
+
+- process_exec: #10의 a/b/c, words/ad 변수와 토큰 분리, 용량 계산,
+  load 뒤 스택 구성, 성공/실패 정리 흐름을 유지한다.
+  #14의 128개 인자 지원을 결합했다. 배열만 임시 힙에 두어 커널 스택을 보호한다.
+  빈 입력, 129개 이상, 한 페이지 초과 입력은 스택에 쓰기 전에 거절한다.
+  setup_stack 이후 쓰기, 8바이트 정렬, argv NULL, rdi/rsi 설정을 유지한다.
+  #11의 load 내부 인자 구성은 중복 적용하지 않는다.
+
+- syscall_handler: #14의 create/open을 함수 안에 그대로 둔다.
+  이전 통합에서 만든 open_file/close_file/read_file 보조 함수는 사용하지 않는다.
+  #14의 SYS_OPEN 블록은 줄바꿈을 제외하면 원본과 완전히 동일하다.
+  create에는 #10의 INT_MAX 크기 검사만 결합했다.
+  halt/exit/wait/write는 #10/#11 기반을 추가하고,
+  close/read는 #12/#13의 switch 분기를 추가했다.
+
+- check_user_string: #14 구현과 설명이 원본과 동일하다.
+  check_user_address: 기존 주소/매핑 검사를 유지하고 PTE 사용자 권한 검사만 추가했다.
+  #10의 check_buffer가 이 검사 함수를 이용해 모든 페이지를 확인한다.
+  read 목적지에는 쓰기 권한 검사도 적용한다.
+  검증은 파일 시스템 잠금을 잡기 전에 끝난다.
+
+- allocate_fd / syscall_close_all_files: #14의 함수, 이름, 설명, 흐름을 유지한다.
+  차이는 NULL 테이블 검사와 128 상수를 FD_TABLE_SIZE로 바꾼 부분뿐이다.
+  이 사실은 함수 본문 비교로 검증했다.
+
+- exit_status: #14의 thread->exit_status를 실행 중 종료값으로 유지한다.
+  process_exit에서 이 값을 #11의 child_status->exit_status에 복사한 뒤
+  자원 정리와 종료 알림을 수행한다. 부모 wait가 읽는 것은 종료 기록이다.
+  SYS_EXIT/주소 오류/사용자 예외가 같은 thread 종료값을 설정한다.
+  종료 메시지는 process_exit에서 사용자 자식에 대해 한 번만 출력한다.
+  process_exit의 void 반환형을 보완했다.
+
+- fd_table: #14의 멤버 이름을 유지한다.
+  #12의 동적 할당/해제를 연결하고 범위는 FD_TABLE_SIZE=130, 파일 FD 2~129로 통일했다.
+  fd_Table과 fd_table을 중복해서 두지 않는다.
+  테이블 할당 실패, 슬롯 부족, close, 종료 해제를 처리한다.
+
+- filesys_lock: #14 잠금 이름/사용 흐름을 유지하고 static만 해제하여
+  #10 ELF 로더와 공유한다. create/open/close/슬롯 부족 시 close/종료 정리가
+  같은 잠금을 사용한다. syscall_close_all_files 선언을 헤더에 추가했다.
+
+- exception.c: #14의 사용자 예외 종료 코드와 한국어 설명을 유지한다.
+  page_fault는 사용자 오류이면 이 kill 경로로 보낸다.
+  커널 오류의 진단 및 PANIC은 유지한다.
+
+- 미지원 syscall: #14의 default -1 반환을 유지한다.
+  이전 통합의 default exit(-1)과 의도적으로 다르다.
+  fork/exec/filesize 등의 구현을 추가한 것은 아니다.
+  read는 유효한 파일 FD/버퍼여도 -1, write는 stdout만 지원한다.
+
+공통 기반 중복
+
+#10에는 #11의 종료 기록/참조 수/대기 구현이 이미 복사되어 있다.
+#10의 Git 조상에 #11이 포함된 것은 아니며 코드 중복이다.
+#11~#13 계보를 병합할 때 이 공통 기반을 두 번 넣지 않았다.
+원본 파일 전체를 다른 버전으로 덮어쓰지 않고 충돌 블록과 기능 단위로 조정했다.
+
+새 검증 결과
+
+실행 중인 기존 Dev Container d809dc0b2e61 사용.
+소스와 빌드는 /tmp/p2-human-first-20261020에 별도 배치했다.
+공식 테스트/checker/기대 출력, .vscode, .devcontainer는 수정하지 않았다.
+강제 thread_yield도 추가하지 않았다.
+기존 테스트 도구를 이용해 .output/.errors/.result를 지운 뒤
+공식 Make .result 및 .ck를 새로 실행했다.
+
+빌드 성공. 기존 fork 골격의 미초기화 변수와 다른 미구현 모듈 경고는 남는다.
+
+공식 44개: PASS 36 / FAIL 8 / 실행·checker 오류 0.
+
+PASS:
+args-none, args-single, args-multiple, args-many, args-dbl-space
+bad-read, bad-write, bad-read2, bad-write2, bad-jump, bad-jump2
+create-normal, create-empty, create-null, create-bad-ptr, create-long,
+create-exists, create-bound
+open-normal, open-missing, open-boundary, open-empty, open-null,
+open-bad-ptr, open-twice
+close-normal, close-twice, close-bad-fd
+read-bad-fd, read-stdout, read-bad-ptr
+halt, exit, write-stdin, write-bad-fd, wait-bad-pid
+
+FAIL:
+read-normal: 일반 파일 read가 -1을 반환한다. filesize도 미구현이다.
+write-normal, write-boundary, write-zero: 일반 파일 write는 -1이다.
+write-bad-ptr: 미지원 파일 write는 버퍼 접근 없이 -1을 반환하며,
+  checker가 요구하는 exit(-1) 동작은 구현하지 않았다.
+wait-simple, wait-twice, wait-killed: fork가 미지원이므로 -1을 반환한다.
+  자식이 생성되지 않아 정상 자식의 대기/종료값 수집에 도달하지 못한다.
+  wait(-1)의 -1 반환은 관찰했지만 wait 전체 검증 완료로 표시하지 않는다.
+
+이전 통합과 공식 PASS/FAIL 집합은 동일하다.
+다만 미지원 syscall의 정책을 #14에 맞췄으므로 실패 출력은 다르다.
+목표 지원 기능의 회귀는 이번 검사에서 발견되지 않았다.
+Project 2 전체 테스트 통과를 의미하지 않는다.
+
+보조 QEMU 검사 11/11 PASS:
+stdout 경계/0바이트/잘못된 FD, FD 128개 소진 및 재사용,
+write 범위 넘침/끝 페이지 미매핑, read 끝 페이지/읽기 전용 메모리,
+open/create 문자열 종단 전 미매핑, 파일 로드 실패, 빈 입력/공백.
+각 상황 뒤 같은 커널 부팅에서 별도 프로그램이 파일 생성/열기/닫기를 수행한다.
+교착/PANIC/중복 종료 메시지는 발견되지 않았다.
+
+실제 process_exec 본문 추출 호스트 검사 10/10 PASS:
+빈 입력/공백, 한 인자/연속 공백, 128개/129개 거절,
+정확히 4096바이트/초과 거절, 인자 배열 할당 실패/부분 로드 실패 정리.
+argc/argv/NULL/문자열/정렬/가짜 반환 주소를 확인한다.
+로더/스케줄러를 stub으로 대체한 검사이며 공식 QEMU 검사와 구분한다.
+
+미검증:
+fork 기반 정상/중복/예외 자식 wait, 동시 프로세스 파일 경쟁,
+FD 테이블 calloc 실패의 강제 주입, 커널 PANIC 강제 발생.
+해당 정리 경로는 소스로 검토했으나 동적 검증 완료로 표시하지 않는다.
+
+로컬 자료
+
+C:\Users\nica7\.codex\worktrees\p2-integrate-pr10-14\validation\human-first
+- preservation-audit.txt: #14 함수 본문 보존 확인
+- pr14-syscall.diff: #14 syscall.c 대비 실제 변경
+- previous-integration.diff: 이전 통합 결과와 비교
+- run_official.py / run_probes.py / probe.c / check_args.py: 재현 도구
+- evidence/: 최종 소스 일치 검증, 빌드/테스트 로그와 개별 공식 결과
+
+이후 반영
+
+사용자 확인 후 codex/p2-human-first를 push하여 develop 대상 통합 PR을 만든다.
+이전 codex/p2-integrate-pr10-14 결과와 혼용하지 않는다.
+원래 커밋 계보를 보존하려면 merge commit 방식으로 반영한 다음,
+#10~#14의 GitHub 상태를 확인하고 아직 열린 PR만 통합 PR 링크로 정리한다.
+이미 포함된 PR을 개별적으로 다시 병합하지 않는다. #9는 그대로 둔다.
