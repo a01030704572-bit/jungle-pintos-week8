@@ -432,8 +432,30 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	process_activate (thread_current ());
 
+	char *tokens[64];
+	int argc = 0;
+	char *save_ptr;
+	/* file_name은 process_exec()이 전달한 수정 가능한 복사본이다. */
+	char *token = strtok_r((char *) file_name, " ", &save_ptr);
+
+	while (token != NULL) {
+		if (argc >= 64) {
+			goto done;
+		}
+
+		tokens[argc] = token;
+		argc++;
+
+		token = strtok_r(NULL, " ", &save_ptr);
+	}
+
+	void *user_addrs[64];  /* tokens 배열과 같은 용량 */
+	if (argc == 0)
+		goto done;
+	strlcpy (t->name, tokens[0], sizeof t->name);
+
 	/* Open executable file. */
-	file = filesys_open (file_name);
+	file = filesys_open (tokens[0]);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
@@ -513,6 +535,34 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	/* 스택이 준비된 뒤 문자열을 복사하고 사용자 주소를 기록한다. */
+	for (int i = argc - 1; i >= 0; i--) {
+		size_t len = strlen (tokens[i]) + 1;
+		if_->rsp -= len;
+		memcpy ((void *) if_->rsp, tokens[i], len);
+		user_addrs[i] = (void *) if_->rsp;
+	}
+
+	/* 8바이트 정렬 */
+	size_t padding = if_->rsp % 8;
+	if_->rsp -= padding;
+	memset((void *) if_->rsp, 0, padding);
+
+	/* argv[argc] = NULL */
+	if_->rsp -= sizeof(char *);
+	memset((void *) if_->rsp, 0, sizeof(char *));
+
+	/* 마지막 인자 주소부터 넣기 */
+	for (int i = argc - 1; i >= 0; i--) {
+		if_->rsp -= sizeof(char *);
+		memcpy((void *) if_->rsp, &user_addrs[i], sizeof(char *));
+	}
+	if_->R.rdi = argc;
+	if_->R.rsi = if_->rsp;
+
+	/* 가짜 반환 주소 */
+	if_->rsp -= 8;
+	memset((void *)if_->rsp, 0, 8);
 
 	success = true;
 
