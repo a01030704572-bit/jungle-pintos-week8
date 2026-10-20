@@ -71,7 +71,6 @@ static void init_thread (struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
-
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
 
@@ -378,7 +377,6 @@ tid_t
 thread_tid (void) {
 	return thread_current ()->tid;
 }
-
 /* Deschedules the current thread and destroys it.  Never
    returns to the caller. */
 void
@@ -621,6 +619,11 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->base_priority = priority;
 	t->wait_on_lock = NULL;
 	list_init(&(t->donations));
+
+#ifdef USERPROG
+	list_init (&t->children);
+	t->child_status = NULL;
+#endif
 
 	//mlfqs - init_thread()
 	t->nice = 0;                                // 기본값 (thread_create에서 부모 값으로 덮어씀)
