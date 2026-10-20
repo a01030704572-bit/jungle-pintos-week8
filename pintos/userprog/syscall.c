@@ -46,6 +46,18 @@ void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
 	switch (f->R.rax) {
+		case SYS_READ:
+			uint64_t fd_RIndex = f->R.rdi;
+			if(fd_RIndex >= 2 && fd_RIndex < FD_TABLE_SIZE)
+			{
+				if(thread_current()->fd_Table[fd_RIndex] != NULL)
+				{
+				}
+				f->R.rax = -1;
+				return;
+			}
+			f->R.rax = -1;
+			return;
 		case SYS_CLOSE:
 			 uint64_t fd_Index = f->R.rdi;
 			 if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
