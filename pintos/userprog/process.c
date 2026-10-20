@@ -14,6 +14,7 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
@@ -26,6 +27,64 @@ static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
+
+struct process_start {
+	thread_func *function;
+	void *aux;
+	struct child_status *child;
+};
+
+/* 부모와 자식 중 마지막 사용자가 종료 기록을 해제한다. */
+static void
+child_status_release (struct child_status *child) {
+	enum intr_level old_level = intr_disable ();
+	ASSERT (child->references > 0);
+	bool last = --child->references == 0;
+	intr_set_level (old_level);
+	if (last)
+		free (child);
+}
+
+/* 자식이 원래 시작 함수를 실행하기 전에 종료 기록을 연결한다. */
+static void
+process_start_child (void *aux) {
+	struct process_start *start = aux;
+	thread_func *function = start->function;
+	void *argument = start->aux;
+	thread_current ()->child_status = start->child;
+	free (start);
+	function (argument);
+}
+
+static tid_t
+process_create_child (const char *name, thread_func *function, void *aux) {
+	struct child_status *child = malloc (sizeof *child);
+	struct process_start *start = malloc (sizeof *start);
+	if (child == NULL || start == NULL) {
+		free (child);
+		free (start);
+		return TID_ERROR;
+	}
+	child->tid = TID_ERROR;
+	child->exit_status = -1;
+	child->waited = false;
+	child->references = 2;
+	sema_init (&child->exit_sema, 0);
+	start->function = function;
+	start->aux = aux;
+	start->child = child;
+
+	tid_t tid = thread_create (name, PRI_DEFAULT, process_start_child, start);
+	if (tid == TID_ERROR) {
+		free (start);
+		free (child);
+		return TID_ERROR;
+	}
+	/* 자식이 먼저 종료해도 부모의 참조가 기록을 유지한다. */
+	child->tid = tid;
+	list_push_back (&thread_current ()->children, &child->elem);
+	return tid;
+}
 
 /* General process initializer for initd and other process. */
 static void
@@ -51,7 +110,7 @@ process_create_initd (const char *file_name) {
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = process_create_child (file_name, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -67,7 +126,7 @@ initd (void *f_name) {
 	process_init ();
 
 	if (process_exec (f_name) < 0)
-		PANIC("Fail to launch initd\n");
+		thread_exit ();
 	NOT_REACHED ();
 }
 
@@ -76,8 +135,7 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	return process_create_child (name, __do_fork, thread_current ());
 }
 
 #ifndef VM
@@ -200,11 +258,34 @@ process_exec (void *f_name) {
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
+process_wait (tid_t child_tid) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	return -1;
+	if (child_tid == TID_ERROR) return -1;
+	struct thread *curr = thread_current ();
+	struct child_status *child = NULL;
+	struct list_elem *e;
+
+	/* 전체 스레드 목록 대신, 내 자식의 종료 기록에서 찾는다. */
+	for (e = list_begin (&curr->children);
+		 e != list_end (&curr->children); e = list_next (e)) {
+		struct child_status *candidate =
+			list_entry (e, struct child_status, elem);
+		if (candidate->tid == child_tid) {
+			child = candidate;
+			break;
+		}
+	}
+
+	if (child == NULL || child->waited)	return -1;
+
+	child->waited = true;
+	sema_down (&child->exit_sema);
+	int exit_status = child->exit_status;
+	list_remove (&child->elem);
+	child_status_release (child);
+	return exit_status;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -216,7 +297,23 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
+	struct child_status *child = curr->child_status;
+	if (child != NULL)
+		printf ("%s: exit(%d)\n", curr->name, child->exit_status);
 	process_cleanup ();
+
+	/* 기다리지 않고 종료하는 부모도 자신의 기록 참조를 내려놓는다. */
+	while (!list_empty (&curr->children)) {
+		struct child_status *descendant = list_entry (
+			list_pop_front (&curr->children), struct child_status, elem);
+		child_status_release (descendant);
+	}
+	if (child != NULL) {
+		curr->child_status = NULL;
+		/* sema_up에서 부모로 실행이 전환되어도 자식의 참조는 유지된다. */
+		sema_up (&child->exit_sema);
+		child_status_release (child);
+	}
 }
 
 /* Free the current process's resources. */
