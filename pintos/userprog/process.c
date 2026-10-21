@@ -1,4 +1,5 @@
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -14,6 +15,7 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
@@ -26,6 +28,64 @@ static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
+
+struct process_start {
+	thread_func *function;
+	void *aux;
+	struct child_status *child;
+};
+
+/* 부모와 자식 중 마지막 사용자가 종료 기록을 해제한다. */
+static void
+child_status_release (struct child_status *child) {
+	enum intr_level old_level = intr_disable ();
+	ASSERT (child->references > 0);
+	bool last = --child->references == 0;
+	intr_set_level (old_level);
+	if (last)
+		free (child);
+}
+
+/* 자식이 원래 시작 함수를 실행하기 전에 종료 기록을 연결한다. */
+static void
+process_start_child (void *aux) {
+	struct process_start *start = aux;
+	thread_func *function = start->function;
+	void *argument = start->aux;
+	thread_current ()->child_status = start->child;
+	free (start);
+	function (argument);
+}
+
+static tid_t
+process_create_child (const char *name, thread_func *function, void *aux) {
+	struct child_status *child = malloc (sizeof *child);
+	struct process_start *start = malloc (sizeof *start);
+	if (child == NULL || start == NULL) {
+		free (child);
+		free (start);
+		return TID_ERROR;
+	}
+	child->tid = TID_ERROR;
+	child->exit_status = -1;
+	child->waited = false;
+	child->references = 2;
+	sema_init (&child->exit_sema, 0);
+	start->function = function;
+	start->aux = aux;
+	start->child = child;
+
+	tid_t tid = thread_create (name, PRI_DEFAULT, process_start_child, start);
+	if (tid == TID_ERROR) {
+		free (start);
+		free (child);
+		return TID_ERROR;
+	}
+	/* 자식이 먼저 종료해도 부모의 참조가 기록을 유지한다. */
+	child->tid = tid;
+	list_push_back (&thread_current ()->children, &child->elem);
+	return tid;
+}
 
 /* General process initializer for initd and other process. */
 static void
@@ -51,7 +111,7 @@ process_create_initd (const char *file_name) {
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = process_create_child (file_name, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -67,7 +127,7 @@ initd (void *f_name) {
 	process_init ();
 
 	if (process_exec (f_name) < 0)
-		PANIC("Fail to launch initd\n");
+		thread_exit ();
 	NOT_REACHED ();
 }
 
@@ -76,8 +136,7 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	return process_create_child (name, __do_fork, thread_current ());
 }
 
 #ifndef VM
@@ -165,28 +224,78 @@ process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
-	struct intr_frame _if;
+	/* Keep the new user context separate from the scheduler's frame. */
+	struct intr_frame _if = {0};
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
 	process_cleanup ();
 
-	/* And then load the binary */
-	success = load (file_name, &_if);
+	char *a = NULL;
+	char *b = strtok_r (file_name, " ", &a);
+	int c = 0;
+	char *words[64];
+	size_t string_bytes = 0;
 
-	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	while (b != NULL) {
+		if (c >= 64)
+			goto fail;
+		size_t len = strlen (b) + 1;
+		if (len > PGSIZE - string_bytes)
+			goto fail;
+		words[c++] = b;
+		string_bytes += len;
+		b = strtok_r (NULL, " ", &a);
+	}
+	if (c == 0)
+		goto fail;
+
+	/* setup_stack() maps one page. Reserve every byte before writing:
+	 * strings, word alignment, argv's NULL, pointers and return address. */
+	size_t aligned_bytes = ROUND_UP (string_bytes, sizeof (char *));
+	size_t pointer_bytes = (c + 2) * sizeof (char *);
+	if (aligned_bytes > PGSIZE - pointer_bytes)
+		goto fail;
+
+	success = load (words[0], &_if);
 	if (!success)
-		return -1;
+		goto fail;
 
-	/* Start switched process. */
+	char *ad[64];
+	for (int i = c - 1; i >= 0; i--) {
+		size_t len = strlen (words[i]) + 1;
+		_if.rsp -= len;
+		memcpy ((void *) _if.rsp, words[i], len);
+		ad[i] = (char *) _if.rsp;
+	}
+
+	size_t padding = aligned_bytes - string_bytes;
+	_if.rsp -= padding;
+	memset ((void *) _if.rsp, 0, padding);
+	_if.rsp -= sizeof (char *);
+	memset ((void *) _if.rsp, 0, sizeof (char *));
+	for (int i = c - 1; i >= 0; i--) {
+		_if.rsp -= sizeof (char *);
+		memcpy ((void *) _if.rsp, &ad[i], sizeof (char *));
+	}
+	_if.R.rdi = c;
+	_if.R.rsi = _if.rsp;
+	_if.rsp -= sizeof (void *);
+	memset ((void *) _if.rsp, 0, sizeof (void *));
+
+	/* Only user-stack addresses survive after the command page is freed. */
+	strlcpy (thread_current ()->name, words[0],
+			sizeof thread_current ()->name);
+	palloc_free_page (file_name);
 	do_iret (&_if);
 	NOT_REACHED ();
+
+fail:
+	/* load() closes its file; discard any partially loaded address space. */
+	process_cleanup ();
+	palloc_free_page (file_name);
+	return -1;
 }
 
 
@@ -200,11 +309,34 @@ process_exec (void *f_name) {
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
+process_wait (tid_t child_tid) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	return -1;
+	if (child_tid == TID_ERROR) return -1;
+	struct thread *curr = thread_current ();
+	struct child_status *child = NULL;
+	struct list_elem *e;
+
+	/* 전체 스레드 목록 대신, 내 자식의 종료 기록에서 찾는다. */
+	for (e = list_begin (&curr->children);
+		 e != list_end (&curr->children); e = list_next (e)) {
+		struct child_status *candidate =
+			list_entry (e, struct child_status, elem);
+		if (candidate->tid == child_tid) {
+			child = candidate;
+			break;
+		}
+	}
+
+	if (child == NULL || child->waited)	return -1;
+
+	child->waited = true;
+	sema_down (&child->exit_sema);
+	int exit_status = child->exit_status;
+	list_remove (&child->elem);
+	child_status_release (child);
+	return exit_status;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -216,7 +348,24 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
+	syscall_close_all ();
+	struct child_status *child = curr->child_status;
+	if (child != NULL)
+		printf ("%s: exit(%d)\n", curr->name, child->exit_status);
 	process_cleanup ();
+
+	/* 기다리지 않고 종료하는 부모도 자신의 기록 참조를 내려놓는다. */
+	while (!list_empty (&curr->children)) {
+		struct child_status *descendant = list_entry (
+			list_pop_front (&curr->children), struct child_status, elem);
+		child_status_release (descendant);
+	}
+	if (child != NULL) {
+		curr->child_status = NULL;
+		/* sema_up에서 부모로 실행이 전환되어도 자식의 참조는 유지된다. */
+		sema_up (&child->exit_sema);
+		child_status_release (child);
+	}
 }
 
 /* Free the current process's resources. */
@@ -335,6 +484,8 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	process_activate (thread_current ());
 
+	/* Serialize executable loading with file syscalls. */
+	lock_acquire (&filesys_lock);
 	/* Open executable file. */
 	file = filesys_open (file_name);
 	if (file == NULL) {
@@ -414,14 +565,15 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	/* process_exec() builds argv after the executable and stack are loaded. */
 
 	success = true;
 
 done:
 	/* We arrive here whether the load is successful or not. */
 	file_close (file);
+	if (lock_held_by_current_thread (&filesys_lock))
+		lock_release (&filesys_lock);
 	return success;
 }
 

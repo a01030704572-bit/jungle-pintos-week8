@@ -5,6 +5,9 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#ifdef USERPROG
+#include "threads/synch.h"
+#endif
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -22,6 +25,19 @@ enum thread_status {
    You can redefine this to whatever type you like. */
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
+
+#ifdef USERPROG
+/* 자식 스레드와 별도로 할당하여, 부모가 종료값을 읽을 때까지 유지할 기록.
+ * 실제 할당 시 exit_sema는 sema_init()으로 0으로 초기화해야 한다. */
+struct child_status {
+	tid_t tid;                       /* 이 기록에 해당하는 자식. */
+	int exit_status;                 /* 프로그램의 종료값 (thread_status와 별개). */
+	bool waited;                     /* 부모가 이미 wait를 요청했는지 여부. */
+	unsigned int references;             /* 부모와 자식이 각각 보유하는 참조 수. */
+	struct semaphore exit_sema;      /* 자식의 종료 알림. */
+	struct list_elem elem;           /* 부모의 children 목록에 연결. */
+};
+#endif
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
@@ -108,7 +124,10 @@ struct thread {
 
 	#ifdef USERPROG
 		/*userprog/process.c가 소유함. */
+		struct file **fd_table;             /* Lazily allocated, owned by this process. */
 		uint64_t *pml4;                     /* 페이지 맵 레벨 4 */
+		struct list children;              /* 부모로서 관리하는 자식 종료 기록 목록. */
+		struct child_status *child_status;  /* 자식으로서 사용하는 자신의 종료 기록. */
 	#endif
 	#ifdef VM
 		/* 스레드가 소유한 전체 가상 메모리에 대한 테이블. */
