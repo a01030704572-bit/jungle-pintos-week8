@@ -88,11 +88,9 @@ process_create_child (const char *name, thread_func *function, void *aux) {
 }
 
 /* General process initializer for initd and other process. */
-static bool
+static void
 process_init (void) {
 	struct thread *current = thread_current ();
-	current->fd_table = calloc (FD_TABLE_SIZE, sizeof *current->fd_table);
-	return current->fd_table != NULL;
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -126,10 +124,7 @@ initd (void *f_name) {
 	supplemental_page_table_init (&thread_current ()->spt);
 #endif
 
-	if (!process_init ()) {
-		palloc_free_page (f_name);
-		thread_exit ();
-	}
+	process_init ();
 
 	if (process_exec (f_name) < 0)
 		thread_exit ();
@@ -213,7 +208,7 @@ __do_fork (void *aux) {
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
 
-	if (!process_init ()) goto error;
+	process_init ();
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
@@ -388,9 +383,7 @@ process_exit (void) {
 	}
 
 	/* 열린 파일 전부 정리 */
-    syscall_close_all_files();
-	free (curr->fd_table);
-	curr->fd_table = NULL;
+	syscall_close_all ();
 
 	process_cleanup ();
 
