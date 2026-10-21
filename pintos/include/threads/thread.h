@@ -43,6 +43,8 @@ struct child_status {
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define FD_TABLE_SIZE 130 /* 표준 입출력 2개 + 파일 FD 128개 */
+
 /* 커널 스레드 또는 사용자 프로세스.
  *
  * 각 스레드 구조체는 4KB 크기의 전용 페이지에 저장됩니다.
@@ -124,10 +126,13 @@ struct thread {
 
 	#ifdef USERPROG
 		/*userprog/process.c가 소유함. */
-		struct file **fd_table;             /* Lazily allocated, owned by this process. */
+		int exit_status;                   /* 실행 중인 프로세스의 종료값. */
+		struct file **fd_table;
 		uint64_t *pml4;                     /* 페이지 맵 레벨 4 */
 		struct list children;              /* 부모로서 관리하는 자식 종료 기록 목록. */
 		struct child_status *child_status;  /* 자식으로서 사용하는 자신의 종료 기록. */
+		/* 실행 중인 실행 파일을 보관 */
+		struct file *running_file;
 	#endif
 	#ifdef VM
 		/* 스레드가 소유한 전체 가상 메모리에 대한 테이블. */

@@ -5,6 +5,6 @@
 
 extern struct lock filesys_lock;
 void syscall_init (void);
-void syscall_close_all (void);
+void syscall_close_all_files (void);
 
 #endif /* userprog/syscall.h */
