@@ -146,6 +146,10 @@ page_fault (struct intr_frame *f) {
 	/* Count page faults. */
 	page_fault_cnt++;
 
+	/* 사용자 예외는 kill에서 -1로 종료하고 커널 오류 진단은 유지한다. */
+	if (user)
+		kill (f);
+
 	/* If the fault is true fault, show info and exit. */
 	printf ("Page fault at %p: %s error %s page in %s context.\n",
 			fault_addr,

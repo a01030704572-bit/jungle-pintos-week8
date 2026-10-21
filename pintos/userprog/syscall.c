@@ -1,9 +1,14 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <limits.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+/* 사용자 페이지 테이블에서 메모리 주소의 매핑 여부를 확인하기 위한 헤더 */
+#include "threads/mmu.h"
+#include "threads/init.h"
 #include "threads/loader.h"
+#include "userprog/process.h"
 #include "userprog/gdt.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
@@ -16,13 +21,13 @@
 
 /* 사용자 메모리 주소 검사 */
 #include "threads/vaddr.h"
-/* 사용자 페이지 테이블에서 메모리 주소의 매핑 여부를 확인하기 위한 헤더 */
-#include "threads/mmu.h"
 /* 사용자 버퍼의 내용을 콘솔에 출력하기 위한 헤더 */
 #include "kernel/console.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
+static void terminate (int status) NO_RETURN;
+static void check_buffer (const void *buffer, unsigned size, bool writable);
 
 /* System call.
  *
@@ -36,8 +41,8 @@ void syscall_handler (struct intr_frame *);
 #define MSR_STAR 0xc0000081         /* Segment selector msr */
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
-/* 파일 시스템 동시 접근 보호 */
-static struct lock filesys_lock;
+/* 파일 시스템 동시 접근 보호: process.c의 ELF 로더와 공유 */
+struct lock filesys_lock;
 
 void
 syscall_init (void) {
@@ -63,7 +68,8 @@ check_user_address(const void *addr) {
     /* 잘못된 사용자 주소인지 검사 */
     if(addr == NULL ||
         !is_user_vaddr(addr) ||
-        pml4_get_page(curr->pml4, addr) == NULL) {
+        pml4_get_page(curr->pml4, addr) == NULL ||
+        !is_user_pte(pml4e_walk(curr->pml4, (uint64_t)addr, 0))) {
 
         /* 비정상 종료 상태 설정 */
         curr->exit_status = -1;
@@ -118,7 +124,7 @@ allocate_fd(struct file *file) {
     struct thread *curr = thread_current();
 
     /* 0과 1은 표준 입출력용으로 예약 */
-    for(int fd = 2; fd < 128; fd++) {
+    for(int fd = 2; fd < FD_TABLE_SIZE; fd++) {
 
         /* 사용하지 않는 FD 번호 확인 */
         if(curr->fd_table[fd] == NULL) {
@@ -148,6 +154,10 @@ syscall_handler(struct intr_frame *f) {
 
     /* 파일 이름 전체의 주소 검사 */
     check_user_string (name);
+    if(initial_size > INT_MAX) {
+        f->R.rax = false;
+        break;
+    }
 
     /* 파일 생성 후 성공 여부 반환 */
     lock_acquire (&filesys_lock);
@@ -156,8 +166,19 @@ syscall_handler(struct intr_frame *f) {
 
     f->R.rax = success;
     break;
-	}
-	  case SYS_OPEN: {
+}
+    case SYS_REMOVE :{
+        const char *name = (const char *) f->R.rdi;
+        check_user_string (name);
+
+        lock_acquire (&filesys_lock);
+        bool success = filesys_remove (name);
+        lock_release (&filesys_lock);
+
+        f->R.rax = success;
+        break;
+    }
+case SYS_OPEN: {
     /* 파일 이름 가져옴 */
      const char *name = (const char *)f->R.rdi;
 
@@ -202,7 +223,7 @@ syscall_handler(struct intr_frame *f) {
     }
 
     /* 유효하지 않은 파일 번호 검사 */
-    if(fd < 1 || fd >= 128 ||
+    if(fd < 1 || fd >= FD_TABLE_SIZE ||
         (fd != 1 && thread_current()->fd_table[fd] == NULL)) {
         f->R.rax = -1;
          break;
@@ -224,7 +245,83 @@ syscall_handler(struct intr_frame *f) {
     lock_release(&filesys_lock);
 
     break;
+		}
+		case SYS_READ: {
+			uint64_t fd_RIndex = f->R.rdi;
+			if(fd_RIndex >= 2 && fd_RIndex < FD_TABLE_SIZE)
+			{
+				if(thread_current()->fd_table[fd_RIndex] != NULL)
+				{
+					// read-bad-ptr: 요청 범위 전체와 쓰기 권한 검사
+					check_buffer ((void *) f->R.rsi, (unsigned) f->R.rdx, true);
+
+                    /* 임시 구현 시작: 정상적인 파일 읽기 */
+                    lock_acquire (&filesys_lock);
+                    f->R.rax = file_read (thread_current ()->fd_table[fd_RIndex],
+                                        (void *) f->R.rsi,
+                                        (unsigned) f->R.rdx);
+                    lock_release (&filesys_lock);
+                    return;
+                    /* 임시 구현 끝: 정상적인 파일 읽기 */
+				}
+				f->R.rax = -1;
+				return;
+			}
+			f->R.rax = -1;
+			return;
+		}
+		case SYS_CLOSE: {
+			 uint64_t fd_Index = f->R.rdi;
+			 if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+			 {
+				if(thread_current()->fd_table[fd_Index] != NULL)
+				{
+					lock_acquire (&filesys_lock);
+					file_close(thread_current()->fd_table[fd_Index]);
+					thread_current()->fd_table[fd_Index] = NULL;
+					lock_release (&filesys_lock);
+				}
+			 }
+			return;
+		}
+    case SYS_HALT:
+        power_off ();
+        return;
+    case SYS_EXIT:
+        terminate ((int) f->R.rdi);
+    case SYS_WAIT:
+        f->R.rax = process_wait ((tid_t) f->R.rdi);
+        return;
+    /* 임시 구현 시작: 파일 크기 조회 */
+    case SYS_FILESIZE: {
+        uint64_t fd = f->R.rdi;
+        struct thread *curr = thread_current ();
+        if (fd < 2 || fd >= FD_TABLE_SIZE ||
+            curr->fd_table[fd] == NULL) {
+            f->R.rax = -1;
+            return;
         }
+        lock_acquire (&filesys_lock);
+        f->R.rax = file_length (curr->fd_table[fd]);
+        lock_release (&filesys_lock);
+        return;
+    }
+    /* 임시 구현 끝: 파일 크기 조회 */
+    /* 임시 구현 시작: SYS_SEEK */
+    case SYS_SEEK:{
+    uint64_t fd_Index = f->R.rdi;
+    if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+    {
+        if(thread_current()->fd_table[fd_Index] != NULL)
+        {
+            lock_acquire(&filesys_lock);
+            file_seek(thread_current()->fd_table[fd_Index], f->R.rsi);
+            lock_release(&filesys_lock);
+        }
+    }
+	return;    
+    }
+    /* 임시 구현 끝: SYS_SEEK */
     /* 지원하지 않는 시스템 콜에 실패값을 반환하는 처리 */
 	default:
     /* 처리할 기능이 없으면 -1 반환 */
@@ -240,9 +337,11 @@ void
 syscall_close_all_files(void) {
     struct thread *curr = thread_current();
 
+    if(curr->fd_table == NULL) return;
+
     lock_acquire(&filesys_lock);
 
-    for(int fd = 2; fd < 128; fd++) {
+    for(int fd = 2; fd < FD_TABLE_SIZE; fd++) {
         if(curr->fd_table[fd] != NULL) {
             file_close (curr->fd_table[fd]);
             curr->fd_table[fd] = NULL;
@@ -251,3 +350,29 @@ syscall_close_all_files(void) {
 
     lock_release(&filesys_lock);
 }
+
+static void
+terminate (int status) {
+    thread_current ()->exit_status = status;
+    thread_exit ();
+}
+
+/* Validate before taking filesys_lock: invalid memory terminates the process. */
+static void
+check_buffer (const void *buffer, unsigned size, bool writable) {
+	if (size == 0)
+		return;
+	uint64_t start = (uint64_t) buffer;
+	if (start == 0 || start >= KERN_BASE || size - 1 > KERN_BASE - 1 - start)
+		terminate (-1);
+	uint64_t last = (uint64_t) pg_round_down (start + size - 1);
+	for (uint64_t page = (uint64_t) pg_round_down (start);; page += PGSIZE) {
+		check_user_address ((const void *) page);
+		uint64_t *pte = pml4e_walk (thread_current ()->pml4, page, 0);
+		if (writable && !is_writable (pte))
+			terminate (-1);
+		if (page == last)
+			break;
+	}
+}
+

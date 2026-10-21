@@ -14,6 +14,7 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
@@ -28,10 +29,70 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
-/* General process initializer for initd and other process. */
+struct process_start {
+	thread_func *function;
+	void *aux;
+	struct child_status *child;
+};
+
+/* 부모와 자식 중 마지막 사용자가 종료 기록을 해제한다. */
 static void
+child_status_release (struct child_status *child) {
+	enum intr_level old_level = intr_disable ();
+	ASSERT (child->references > 0);
+	bool last = --child->references == 0;
+	intr_set_level (old_level);
+	if (last)
+		free (child);
+}
+
+/* 자식이 원래 시작 함수를 실행하기 전에 종료 기록을 연결한다. */
+static void
+process_start_child (void *aux) {
+	struct process_start *start = aux;
+	thread_func *function = start->function;
+	void *argument = start->aux;
+	thread_current ()->child_status = start->child;
+	free (start);
+	function (argument);
+}
+
+static tid_t
+process_create_child (const char *name, thread_func *function, void *aux) {
+	struct child_status *child = malloc (sizeof *child);
+	struct process_start *start = malloc (sizeof *start);
+	if (child == NULL || start == NULL) {
+		free (child);
+		free (start);
+		return TID_ERROR;
+	}
+	child->tid = TID_ERROR;
+	child->exit_status = -1;
+	child->waited = false;
+	child->references = 2;
+	sema_init (&child->exit_sema, 0);
+	start->function = function;
+	start->aux = aux;
+	start->child = child;
+
+	tid_t tid = thread_create (name, PRI_DEFAULT, process_start_child, start);
+	if (tid == TID_ERROR) {
+		free (start);
+		free (child);
+		return TID_ERROR;
+	}
+	/* 자식이 먼저 종료해도 부모의 참조가 기록을 유지한다. */
+	child->tid = tid;
+	list_push_back (&thread_current ()->children, &child->elem);
+	return tid;
+}
+
+/* General process initializer for initd and other process. */
+static bool
 process_init (void) {
 	struct thread *current = thread_current ();
+	current->fd_table = calloc (FD_TABLE_SIZE, sizeof *current->fd_table);
+	return current->fd_table != NULL;
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -52,7 +113,7 @@ process_create_initd (const char *file_name) {
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = process_create_child (file_name, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -65,10 +126,13 @@ initd (void *f_name) {
 	supplemental_page_table_init (&thread_current ()->spt);
 #endif
 
-	process_init ();
+	if (!process_init ()) {
+		palloc_free_page (f_name);
+		thread_exit ();
+	}
 
 	if (process_exec (f_name) < 0)
-		PANIC("Fail to launch initd\n");
+		thread_exit ();
 	NOT_REACHED ();
 }
 
@@ -77,8 +141,7 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	return process_create_child (name, __do_fork, thread_current ());
 }
 
 #ifndef VM
@@ -150,7 +213,7 @@ __do_fork (void *aux) {
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
 
-	process_init ();
+	if (!process_init ()) goto error;
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
@@ -161,121 +224,110 @@ error:
 
 /* 기존 프로세스를 정리하고 새 실행 파일을 적재한 뒤 명령줄 인자를 전달하여 사용자 프로그램 실행 */
 int
-process_exec (void *f_name) { // B
-    char *file_name = f_name;
-    bool success;
+process_exec (void *f_name) {
+	char *file_name = f_name;
+	bool success;
 
-    /* 사용자 모드 실행 환경 설정 */
-    struct intr_frame _if;
-    _if.ds = _if.es = _if.ss = SEL_UDSEG;
-    _if.cs = SEL_UCSEG;
-    _if.eflags = FLAG_IF | FLAG_MBS;
+	/* Keep the new user context separate from the scheduler's frame. */
+	/* 사용자 모드 실행 환경 설정 */
+	struct intr_frame _if = {0};
+	_if.ds = _if.es = _if.ss = SEL_UDSEG;
+	_if.cs = SEL_UCSEG;
+	_if.eflags = FLAG_IF | FLAG_MBS;
 
-    /* 기존 프로세스 메모리 정리 */
-    process_cleanup ();
+	/* 기존 프로세스 메모리 정리 */
+	process_cleanup ();
 
-    /* 명령줄 복사용 메모리 할당 */
-    char *cmd_copy = palloc_get_page(0);
+	/* 명령줄 인자 저장 배열 및 개수 초기화 */
+	/* 128개 인자 배열은 작은 커널 스택 대신 임시 힙에 둔다. */
+	char **words = malloc (2 * 128 * sizeof *words);
+	/* 메모리 할당 실패 시 종료 */
+	if (words == NULL)
+		goto fail;
+	/* 인자 문자열의 사용자 스택 주소 저장 */
+	char **ad = words + 128;
 
-    /* 메모리 할당 실패 시 종료 */
-    if (cmd_copy == NULL) {
-        palloc_free_page(file_name);
-        return -1;
-    }
+	/* 인자 분리용 변수 선언 */
+	char *a = NULL;
+	/* 실행 파일 이름 추출 */
+	char *b = strtok_r (file_name, " ", &a);
+	int c = 0;
+	size_t string_bytes = 0;
 
-    /* 원본 명령줄 복사 */
-    strlcpy(cmd_copy, file_name, PGSIZE);
+	/* 명령줄을 공백 기준으로 분리 */
+	while (b != NULL) {
+		/* 인자 개수 초과 시 종료 */
+		if (c >= 128)
+			goto fail;
+		size_t len = strlen (b) + 1;
+		if (len > PGSIZE - string_bytes)
+			goto fail;
+		/* 분리한 인자 저장 및 개수 증가 */
+		words[c++] = b;
+		string_bytes += len;
+		b = strtok_r (NULL, " ", &a);
+	}
+	/* 실행 파일 이름 없으면 종료 */
+	if (c == 0)
+		goto fail;
 
-    /* 실행 파일 이름 추출 */
-    char *save_p;
-    char *program_name = strtok_r(cmd_copy, " ", &save_p);
+	/* setup_stack() maps one page. Reserve every byte before writing:
+	 * strings, word alignment, argv's NULL, pointers and return address. */
+	size_t aligned_bytes = ROUND_UP (string_bytes, sizeof (char *));
+	size_t pointer_bytes = (c + 2) * sizeof (char *);
+	if (aligned_bytes > PGSIZE - pointer_bytes)
+		goto fail;
 
-    /* 실행 파일 이름 없으면 종료 */
-    if (program_name == NULL) {//메모리를 해제하지 않을 시 메모리 누수 발생 (트러블 슈팅 후보1)
-    palloc_free_page(cmd_copy);
-    palloc_free_page(file_name);
-    return -1;
-}
+	/* 실행 파일 메모리에 적재 */
+	success = load (words[0], &_if);
+	/* 적재 실패 시 메모리 해제 후 종료 */
+	if (!success)
+		goto fail;
 
-    /* 실행 파일 메모리에 적재 */
-    success = load(program_name, &_if);
+	/* 인자 문자열을 사용자 스택에 역순 복사 */
+	for (int i = c - 1; i >= 0; i--) {
+		size_t len = strlen (words[i]) + 1;
+		_if.rsp -= len;
+		memcpy ((void *) _if.rsp, words[i], len);
+		ad[i] = (char *) _if.rsp;
+	}
 
-    /* 명령줄 복사본 메모리 해제 */
-    palloc_free_page(cmd_copy);
+	/* 스택을 8바이트 경계에 정렬 */
+	size_t padding = aligned_bytes - string_bytes;
+	_if.rsp -= padding;
+	memset ((void *) _if.rsp, 0, padding);
+	/* argv 배열의 마지막 NULL 포인터 저장 */
+	_if.rsp -= sizeof (char *);
+	memset ((void *) _if.rsp, 0, sizeof (char *));
+	/* argv 포인터들을 역순으로 스택에 저장 */
+	for (int i = c - 1; i >= 0; i--) {
+		_if.rsp -= sizeof (char *);
+		memcpy ((void *) _if.rsp, &ad[i], sizeof (char *));
+	}
+	/* argc와 argv 주소를 CPU 레지스터에 전달 */
+	_if.R.rdi = c;
+	/* argv 배열의 시작 주소 저장 */
+	_if.R.rsi = _if.rsp;
+	/* 가짜 반환 주소를 스택에 저장 */
+	_if.rsp -= sizeof (void *);
+	memset ((void *) _if.rsp, 0, sizeof (void *));
 
-    /* 적재 실패 시 메모리 해제 후 종료 */
-    if (!success) {
-        palloc_free_page(file_name);
-        return -1;
-    }
-
-//-----------------------------여기부터 Ai에게 Help 요청ㅜㅜ
-/* 명령줄 인자 저장 배열 및 개수 초기화 */
-    char *argv[128];
-    int argc = 0;
-
-    /* 인자 분리용 변수 선언 */
-    char *token;
-    char *arg_save_p;
-
-    /* 명령줄을 공백 기준으로 분리 */
-    for (token = strtok_r(file_name, " ", &arg_save_p);
-         token != NULL;
-         token = strtok_r (NULL, " ", &arg_save_p)) {
-
-        /* 인자 개수 초과 시 종료 */
-        if (argc >= 128) {
-            palloc_free_page(file_name);
-            return -1;
-        }
-
-        /* 분리한 인자 저장 및 개수 증가 */
-        argv[argc++] = token;
-    }
-
-    /* 인자 문자열의 사용자 스택 주소 저장 */
-    char *arg_addresses[128];
-
-    /* 인자 문자열을 사용자 스택에 역순 복사 */
-    for (int i = argc - 1; i >= 0; i--) {
-        size_t len = strlen(argv[i]) + 1;
-
-        _if.rsp -= len;
-        memcpy ((void *) _if.rsp, argv[i], len);
-
-        arg_addresses[i] = (char *) _if.rsp;
-    }
-
-    /* 스택을 8바이트 경계에 정렬 */
-    _if.rsp &= ~((uint64_t) 7);
-
-    /* argv 배열의 마지막 NULL 포인터 저장 */
-    _if.rsp -= sizeof (char *);
-    *(char **) _if.rsp = NULL;
-
-    /* argv 포인터들을 역순으로 스택에 저장 */
-    for (int i = argc - 1; i >= 0; i--) {
-        _if.rsp -= sizeof(char *);
-        *(char **) _if.rsp = arg_addresses[i];
-    }
-
-    /* argv 배열의 시작 주소 저장 */
-    char **argv_address = (char **) _if.rsp;
-
-    /* argc와 argv 주소를 CPU 레지스터에 전달 */
-    _if.R.rdi = argc;
-    _if.R.rsi = (uint64_t) argv_address;
-
-    /* 가짜 반환 주소를 스택에 저장 */
-    _if.rsp -= sizeof(void *);
-    *(uint64_t *) _if.rsp = 0;
-
-    /* 사용이 끝난 명령줄 메모리 해제 */
-    palloc_free_page(file_name);
-
+	/* Only user-stack addresses survive after the command page is freed. */
+	strlcpy (thread_current ()->name, words[0],
+			sizeof thread_current ()->name);
+	free (words);
+	/* 사용이 끝난 명령줄 메모리 해제 */
+	palloc_free_page (file_name);
 	/* 사용자 프로세스 실행 */
 	do_iret (&_if);
 	NOT_REACHED ();
+
+fail:
+	/* load() closes its file; discard any partially loaded address space. */
+	process_cleanup ();
+	free (words);
+	palloc_free_page (file_name);
+	return -1;
 }
 
 
@@ -289,14 +341,38 @@ process_exec (void *f_name) { // B
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
+process_wait (tid_t child_tid) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	return -1;
+	if (child_tid == TID_ERROR) return -1;
+	struct thread *curr = thread_current ();
+	struct child_status *child = NULL;
+	struct list_elem *e;
+
+	/* 전체 스레드 목록 대신, 내 자식의 종료 기록에서 찾는다. */
+	for (e = list_begin (&curr->children);
+		 e != list_end (&curr->children); e = list_next (e)) {
+		struct child_status *candidate =
+			list_entry (e, struct child_status, elem);
+		if (candidate->tid == child_tid) {
+			child = candidate;
+			break;
+		}
+	}
+
+	if (child == NULL || child->waited)	return -1;
+
+	child->waited = true;
+	sema_down (&child->exit_sema);
+	int exit_status = child->exit_status;
+	list_remove (&child->elem);
+	child_status_release (child);
+	return exit_status;
 }
 
 /* 프로세스 종료 시 호출되어 종료 상태 출력 및 자원 정리 수행 */
+void
 process_exit (void) {
 	struct thread *curr = thread_current ();
 	/* TODO: 여기에 코드를 작성하세요.
@@ -304,19 +380,46 @@ process_exit (void) {
 	 * TODO: 이곳에서 프로세스 자원 정리(cleanup)를 구현하는 것을 권장합니다. */
 
 	/* 사용자 프로세스의 종료 상태 출력 */
-	printf ("%s: exit(%d)\n", curr->name, curr->exit_status);
+	struct child_status *child = curr->child_status;
+	if (child != NULL) {
+		/* #14의 종료값을 #11의 부모 대기 기록에 전달한다. */
+		child->exit_status = curr->exit_status;
+		printf ("%s: exit(%d)\n", curr->name, curr->exit_status);
+	}
 
 	/* 열린 파일 전부 정리 */
     syscall_close_all_files();
+	free (curr->fd_table);
+	curr->fd_table = NULL;
 
 	process_cleanup ();
+
+	/* 기다리지 않고 종료하는 부모도 자신의 기록 참조를 내려놓는다. */
+	while (!list_empty (&curr->children)) {
+		struct child_status *descendant = list_entry (
+			list_pop_front (&curr->children), struct child_status, elem);
+		child_status_release (descendant);
+	}
+	if (child != NULL) {
+		curr->child_status = NULL;
+		/* sema_up에서 부모로 실행이 전환되어도 자식의 참조는 유지된다. */
+		sema_up (&child->exit_sema);
+		child_status_release (child);
+	}
 }
 
 /* Free the current process's resources. */
 static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
-
+	/* 임시 구현 시작: 종료 또는 exec 시 이전 실행 파일 정리 */
+	if (curr->running_file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (curr->running_file);
+		curr->running_file = NULL;
+		lock_release (&filesys_lock);
+	}
+	/* 임시 구현 끝: 종료 또는 exec 시 이전 실행 파일 정리 */
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
 #endif
@@ -424,13 +527,15 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	process_activate (thread_current ());
 
+	/* Serialize executable loading with file creation. */
+	lock_acquire (&filesys_lock);
 	/* Open executable file. */
 	file = filesys_open (file_name);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
+	file_deny_write(file);
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -503,14 +608,18 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	/* process_exec() builds argv after the executable and stack are loaded. */
 
 	success = true;
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	/* 임시 구현 시작: 적재 성공 시 실행 파일의 소유권을 현재 프로세스로 이전 */
+	if (success) t->running_file = file;
+	else file_close (file);
+	/* 임시 구현 끝: 적재 성공 시 실행 파일의 소유권을 현재 프로세스로 이전 */
+	if (lock_held_by_current_thread (&filesys_lock))
+		lock_release (&filesys_lock);
 	return success;
 }
 
