@@ -142,7 +142,17 @@ syscall_handler(struct intr_frame *f) {
     f->R.rax = success;
     break;
 }
+    case SYS_REMOVE :{
+        const char *name = (const char *) f->R.rdi;
+        check_user_string (name);
 
+        lock_acquire (&filesys_lock);
+        bool success = filesys_remove (name);
+        lock_release (&filesys_lock);
+
+        f->R.rax = success;
+        break;
+    }
 case SYS_OPEN: {
     /* 파일 이름 가져옴 */
     const char *name = (const char *) f->R.rdi;
