@@ -412,7 +412,14 @@ process_exit (void) {
 static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
-
+	/* 임시 구현 시작: 종료 또는 exec 시 이전 실행 파일 정리 */
+	if (curr->running_file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (curr->running_file);
+		curr->running_file = NULL;
+		lock_release (&filesys_lock);
+	}
+	/* 임시 구현 끝: 종료 또는 exec 시 이전 실행 파일 정리 */
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
 #endif
@@ -528,7 +535,7 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
+	file_deny_write(file);
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -607,7 +614,10 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	/* 임시 구현 시작: 적재 성공 시 실행 파일의 소유권을 현재 프로세스로 이전 */
+	if (success) t->running_file = file;
+	else file_close (file);
+	/* 임시 구현 끝: 적재 성공 시 실행 파일의 소유권을 현재 프로세스로 이전 */
 	if (lock_held_by_current_thread (&filesys_lock))
 		lock_release (&filesys_lock);
 	return success;
