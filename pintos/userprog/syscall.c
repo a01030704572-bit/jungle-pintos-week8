@@ -220,10 +220,44 @@ case SYS_OPEN: {
     case SYS_WAIT:
         f->R.rax = process_wait ((tid_t) f->R.rdi);
         return;
-    case SYS_WRITE:
-        f->R.rax = write_console ((int) f->R.rdi, (const void *) f->R.rsi,
+    case SYS_WRITE:{
+        uint64_t fd_Index = f->R.rdi;
+        if(fd_Index == 1)
+        {
+            f->R.rax = write_console ((int) f->R.rdi, (const void *) f->R.rsi,
                                  (unsigned) f->R.rdx);
+            return;
+        }        
+        if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+        {
+            if(thread_current()->fd_table[fd_Index] != NULL)
+            {
+                check_buffer ((void *) f->R.rsi, (unsigned) f->R.rdx, false);
+                lock_acquire (&filesys_lock); 
+                f->R.rax = file_write (thread_current()->fd_table[fd_Index], 
+                    (const void *) f->R.rsi, (unsigned) f->R.rdx); 
+                lock_release (&filesys_lock);
+                return;
+            }
+        }
+        f->R.rax = -1;
         return;
+    }
+    /* 임시 구현 시작: 파일 크기 조회 */
+    case SYS_FILESIZE: {
+        uint64_t fd = f->R.rdi;
+        struct thread *curr = thread_current ();
+        if (fd < 2 || fd >= FD_TABLE_SIZE ||
+            curr->fd_table[fd] == NULL) {
+            f->R.rax = -1;
+            return;
+        }
+        lock_acquire (&filesys_lock);
+        f->R.rax = file_length (curr->fd_table[fd]);
+        lock_release (&filesys_lock);
+        return;
+    }
+    /* 임시 구현 끝: 파일 크기 조회 */
     /* 지원하지 않는 시스템 콜에 실패값을 반환하는 처리 */
 	default:
     /* 처리할 기능이 없으면 -1 반환 */
