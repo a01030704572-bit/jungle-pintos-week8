@@ -16,6 +16,10 @@
 
 /* 사용자 메모리 주소 검사 */
 #include "threads/vaddr.h"
+/* 사용자 페이지 테이블에서 메모리 주소의 매핑 여부를 확인하기 위한 헤더 */
+#include "threads/mmu.h"
+/* 사용자 버퍼의 내용을 콘솔에 출력하기 위한 헤더 */
+#include "kernel/console.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -85,6 +89,29 @@ check_user_string(const char *str) {
     }
 }
 
+/* 사용자 버퍼의 전체 주소를 검사하고 잘못된 메모리 접근 시 프로세스를 종료하는 함수 */
+static void
+check_user_buffer(const void *buffer, unsigned size) {
+    /* 시작 주소를 정수로 변환 */
+    uintptr_t start = (uintptr_t)buffer;
+
+    /* 크기가 0이면 검사 생략 */
+    if(size == 0)
+        return;
+
+    /* 마지막 주소 계산 시 오버플로 검사 */
+    if((uintptr_t)(size - 1) > UINTPTR_MAX - start) {
+        thread_current()->exit_status = -1;
+        thread_exit();
+    }
+
+    /* 버퍼에 포함된 모든 주소 검사 */
+    for(uintptr_t i = 0; i < size; i++) {
+        check_user_address((const void *)(start + i));
+    }
+}
+
+
 /* 열린 파일에 사용 가능한 FD 번호를 할당 */
 static int
 allocate_fd(struct file *file) {
@@ -129,21 +156,20 @@ syscall_handler(struct intr_frame *f) {
 
     f->R.rax = success;
     break;
-}
-
-case SYS_OPEN: {
+	}
+	  case SYS_OPEN: {
     /* 파일 이름 가져옴 */
-    const char *name = (const char *) f->R.rdi;
+     const char *name = (const char *)f->R.rdi;
 
-    /* 파일 이름 전체의 주소 검사 */
-    check_user_string (name);
+     /* 파일 이름 전체 주소 검사 */
+    check_user_string(name);
 
     /* 기존 파일 열기 */
-    lock_acquire(&filesys_lock);
+	lock_acquire(&filesys_lock);
     struct file *file = filesys_open(name);
     lock_release(&filesys_lock);
 
-    /* 파일이 존재하지 않으면 실패 */
+    /* 파일이 없으면 실패 반환 */
     if(file == NULL) {
         f->R.rax = -1;
         break;
@@ -154,14 +180,51 @@ case SYS_OPEN: {
 
     /* FD 할당 실패 시 파일 닫기 */
     if(fd == -1) {
-        lock_acquire (&filesys_lock);
-        file_close (file);
-        lock_release (&filesys_lock);
+        lock_acquire(&filesys_lock);
+        file_close(file);
+        lock_release(&filesys_lock);
     }
 
     f->R.rax = fd;
+    	break;
+    }
+
+        case SYS_WRITE: {
+            /* 파일 번호와 버퍼 및 크기 가져옴 */
+            int fd = (int)f->R.rdi;
+            const void *buffer = (const void *)f->R.rsi;
+            unsigned size = (unsigned)f->R.rdx;
+
+    /* 기록할 데이터가 없으면 0 반환 */
+    if(size == 0) {
+        f->R.rax = 0;
+        break;
+    }
+
+    /* 유효하지 않은 파일 번호 검사 */
+    if(fd < 1 || fd >= 128 ||
+        (fd != 1 && thread_current()->fd_table[fd] == NULL)) {
+        f->R.rax = -1;
+         break;
+    }
+
+     /* 사용자 버퍼의 전체 메모리 범위 검사 */
+    check_user_buffer(buffer, size);
+
+	/* 표준 출력이면 콘솔에 기록 */
+    if(fd == 1) {
+    putbuf(buffer, size);
+    f->R.rax = size;
+        break;
+}
+
+    /* 일반 파일이면 실제 데이터 기록 */
+    lock_acquire(&filesys_lock);
+    f->R.rax = file_write(thread_current()->fd_table[fd], buffer, size);
+    lock_release(&filesys_lock);
+
     break;
-		}
+        }
     /* 지원하지 않는 시스템 콜에 실패값을 반환하는 처리 */
 	default:
     /* 처리할 기능이 없으면 -1 반환 */
