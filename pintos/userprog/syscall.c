@@ -183,6 +183,14 @@ case SYS_OPEN: {
 					// read-bad-ptr: 요청 범위 전체와 쓰기 권한 검사
 					check_buffer ((void *) f->R.rsi, (unsigned) f->R.rdx, true);
 
+                    /* 임시 구현 시작: 정상적인 파일 읽기 */
+                    lock_acquire (&filesys_lock);
+                    f->R.rax = file_read (thread_current ()->fd_table[fd_RIndex],
+                                        (void *) f->R.rsi,
+                                        (unsigned) f->R.rdx);
+                    lock_release (&filesys_lock);
+                    return;
+                    /* 임시 구현 끝: 정상적인 파일 읽기 */
 				}
 				f->R.rax = -1;
 				return;
