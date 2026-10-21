@@ -258,6 +258,21 @@ case SYS_OPEN: {
         return;
     }
     /* 임시 구현 끝: 파일 크기 조회 */
+    /* 임시 구현 시작: SYS_SEEK */
+    case SYS_SEEK:{
+    uint64_t fd_Index = f->R.rdi;
+    if(fd_Index >= 2 && fd_Index < FD_TABLE_SIZE)
+    {
+        if(thread_current()->fd_table[fd_Index] != NULL)
+        {
+            lock_acquire(&filesys_lock);
+            file_seek(thread_current()->fd_table[fd_Index], f->R.rsi);
+            lock_release(&filesys_lock);
+        }
+    }
+	return;    
+    }
+    /* 임시 구현 끝: SYS_SEEK */
     /* 지원하지 않는 시스템 콜에 실패값을 반환하는 처리 */
 	default:
     /* 처리할 기능이 없으면 -1 반환 */
